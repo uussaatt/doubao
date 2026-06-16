@@ -4332,9 +4332,11 @@ class OCRApp:
             import opencc
             txt = self.report_text.get("1.0", tk.END).strip()
             if txt:
-                converter = opencc.OpenCC(mode);
-                self.report_text.delete("1.0", tk.END);
+                converter = opencc.OpenCC(mode)
+                yview = self.report_text.yview()
+                self.report_text.delete("1.0", tk.END)
                 self.report_text.insert(tk.END, converter.convert(txt))
+                self.report_text.yview_moveto(yview[0])
         except ImportError:
             messagebox.showwarning("提示", "需要安装 opencc-python-reimplemented 库才能使用繁简转换功能")
 
