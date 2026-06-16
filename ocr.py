@@ -2959,6 +2959,46 @@ class OCRApp:
         # 这个方法现在被 start_inline_edit 替代，但保留以防需要
         self.start_inline_edit(iid, '#0')
     
+    def show_toast(self, message, duration=3000):
+        """右下角弹出自动消失的 Toast 通知"""
+        try:
+            toast = tk.Toplevel(self.root)
+            toast.overrideredirect(True)
+            toast.attributes('-topmost', True)
+            toast.attributes('-alpha', 0.92)
+
+            lbl = tk.Label(toast, text=message, bg='#323232', fg='white',
+                           font=('Microsoft YaHei', 12), padx=24, pady=16,
+                           wraplength=420, justify=tk.LEFT)
+            lbl.pack()
+
+            toast.update_idletasks()
+            tw = toast.winfo_reqwidth()
+            th = toast.winfo_reqheight()
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            x = sw - tw - 24
+            y = sh - th - 60
+            toast.geometry(f'+{x}+{y}')
+
+            # 点击也可以关闭
+            lbl.bind('<Button-1>', lambda e: toast.destroy())
+
+            # 淡出关闭
+            def _fade_out(alpha=0.92):
+                if not toast.winfo_exists():
+                    return
+                alpha -= 0.06
+                if alpha <= 0:
+                    toast.destroy()
+                else:
+                    toast.attributes('-alpha', alpha)
+                    toast.after(40, lambda: _fade_out(alpha))
+
+            toast.after(duration, _fade_out)
+        except Exception:
+            pass
+
     def show_temp_message(self, message, duration=2000):
         """显示临时消息提示"""
         try:
@@ -3062,20 +3102,11 @@ class OCRApp:
             a_count = len(self.df[self.df['Group'] == 'A'])
             c_count = len(self.df[self.df['Group'] == 'C'])
             total_items = len(self.df)
-            
-            messagebox.showinfo("拆分完成", 
-                              f"✅ 拆分操作完成！\n\n" +
-                              f"📊 处理结果：\n" +
-                              f"• 拆分了 {split_count} 个原始项目\n" +
-                              f"• 生成了 {split_count * 2} 个新项目\n\n" +
-                              f"📈 当前数据统计：\n" +
-                              f"• A组项目：{a_count} 个\n" +
-                              f"• C组项目：{c_count} 个\n" +
-                              f"• 总项目数：{total_items} 个\n\n" +
-                              f"💡 拆分规则：\n" +
-                              f"• 前两个字 → A组\n" +
-                              f"• 其余文字 → C组\n" +
-                              f"• 其他条目的组值保持不变")
+
+            self.show_toast(
+                f"✅ 拆分完成：{split_count} 个项目\n"
+                f"A组 {a_count} 个 · C组 {c_count} 个 · 共 {total_items} 个"
+            )
             
         except Exception as e:
             # 清除进度显示
@@ -3606,7 +3637,7 @@ class OCRApp:
                 self.undo_stack.pop(0)
             self.update_undo_button_state()
             self.show_temp_message(f"✓ 已拆分A组：{split_count} 个项目")
-            messagebox.showinfo("拆分完成", f"已拆分A组：{split_count} 个项目")
+            self.show_toast(f"✅ 拆分完成：{split_count} 个项目")
         else:
             self.show_temp_message("✓ 没有需要拆分的A组项目")
     
@@ -4344,19 +4375,7 @@ class OCRApp:
                 # 显示成功消息
                 file_size = len(content.encode('utf-8'))
                 line_count = len(filtered)
-                
-                # 获取历史记录状态
-                export_history = self.store.get('export_history', [])
-                current_limit = self.store.get('export_history_limit', 500)
-                
-                messagebox.showinfo("导出成功", 
-                                  f"✅ 文本报告已导出！\n\n" +
-                                  f"📁 文件路径：{path}\n" +
-                                  f"📊 统计信息：\n" +
-                                  f"• 行数：{line_count} 行\n" +
-                                  f"• 大小：{file_size} 字节\n\n" +
-                                  f"📜 历史记录：{len(export_history)}/{current_limit}\n" +
-                                  f"💡 导出内容已保存到软件历史记录中")
+                self.show_toast(f"✅ 导出成功\n📁 {os.path.basename(path)}\n{line_count} 行 · {file_size} 字节")
                 
             except Exception as e:
                 messagebox.showerror("导出失败", f"导出文件时出错：{str(e)}")
@@ -4450,7 +4469,7 @@ class OCRApp:
                     ws.column_dimensions[col].width = width
 
             self.save_export_record(path, report_content)
-            messagebox.showinfo("导出成功", f"Excel 已导出：\n{path}")
+            self.show_toast(f"✅ Excel 导出成功\n📁 {os.path.basename(path)}")
 
         except ImportError:
             messagebox.showerror("导出失败", "缺少 Excel 写入组件，请安装 openpyxl 后重试。")
@@ -4927,13 +4946,7 @@ class OCRApp:
             
             # 显示成功消息
             file_size = len(export_content.encode('utf-8'))
-            messagebox.showinfo("导出成功", 
-                              f"✅ 所有历史记录已导出！\n\n" +
-                              f"📁 文件路径：{path}\n" +
-                              f"📊 统计信息：\n" +
-                              f"• 记录数量：{len(export_history)} 个\n" +
-                              f"• 文件大小：{file_size} 字节\n\n" +
-                              f"💡 包含所有历史记录的完整内容和元数据")
+            self.show_toast(f"✅ 历史记录导出成功\n📁 {os.path.basename(path)}\n共 {len(export_history)} 条记录")
             
         except Exception as e:
             messagebox.showerror("导出失败", f"导出所有历史记录时出错：{str(e)}")
@@ -8424,7 +8437,7 @@ class OCRApp:
                 messagebox.showinfo("成功", "历史记录已清空")
         
         def copy_selected_text():
-            """复制选定记录的纯文字内容"""
+            """复制选定记录并解析到分类数据"""
             selection = tree.selection()
             if not selection:
                 messagebox.showwarning("提示", "请先选择一条历史记录")
@@ -8434,7 +8447,6 @@ class OCRApp:
                 history_index = int(selection[0].replace("history_", ""))
                 history_item = self.history_data[history_index]
 
-                # 提取纯文字内容
                 pure_content = []
                 for file_info in history_item['files']:
                     for line in file_info['content']:
@@ -8446,6 +8458,11 @@ class OCRApp:
                 if final_text:
                     self.root.clipboard_clear()
                     self.root.clipboard_append(final_text)
+                    # 解析到分类数据
+                    self.text_input.delete("1.0", tk.END)
+                    self.text_input.insert(tk.END, final_text)
+                    self.load_from_text()
+                    history_window.destroy()
                 else:
                     messagebox.showwarning("提示", "该记录没有可复制的文字内容")
                     
@@ -8534,7 +8551,7 @@ class OCRApp:
             
             limit_entry.bind("<Return>", lambda e: save_limit())
         
-        tk.Button(btn_frame, text="📋 复制文字", command=copy_selected_text,
+        tk.Button(btn_frame, text="📋 复制解析", command=copy_selected_text,
                  bg="#4CAF50", fg="white", padx=20, pady=8).pack(side=tk.LEFT, padx=5)
         
         tk.Button(btn_frame, text="数量设置", command=set_history_limit,
