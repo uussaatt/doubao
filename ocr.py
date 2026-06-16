@@ -9353,7 +9353,7 @@ class OCRApp:
             hint_win.attributes('-topmost', True)
             hint_win.geometry('+10+10')
             count_label = tk.Label(hint_win,
-                text=f'框选第 {len(captured_shots)+1} 张 | Enter=完成拼接 | Esc=取消',
+                text=f'框选第 {len(captured_shots)+1} 张 | 空格=暂停移动 | Enter=完成 | Esc=取消',
                 bg='#1976D2', fg='white',
                 font=('Microsoft YaHei', 13, 'bold'),
                 padx=12, pady=6)
@@ -9361,6 +9361,40 @@ class OCRApp:
 
             start_x = start_y = 0
             rect_id = None
+            _mid_drag = {'active': False, 'last_y': 0, 'last_x': 0}
+            _paused = [False]
+
+            def on_pause_toggle(e=None):
+                """空格键：暂停/恢复截图覆盖层"""
+                if not _paused[0]:
+                    # 暂停：隐藏覆盖层，释放鼠标焦点
+                    _paused[0] = True
+                    overlay.attributes('-alpha', 0.0)
+                    overlay.attributes('-topmost', False)
+                    overlay.withdraw()
+                    count_label.config(
+                        text='⏸ 已暂停，自由操作中 | 再按空格继续截图',
+                        bg='#E65100')
+                else:
+                    # 恢复：重新显示覆盖层
+                    _paused[0] = False
+                    overlay.deiconify()
+                    overlay.attributes('-topmost', True)
+                    overlay.attributes('-alpha', 0.25)
+                    overlay.focus_force()
+                    canvas.focus_set()
+                    size_hint = ''
+                    if captured_shots:
+                        total_w = sum(s.width for s in captured_shots)
+                        max_h = max(s.height for s in captured_shots)
+                        size_hint = f'已截 {len(captured_shots)} 张 | 累计：{total_w}×{max_h} px | '
+                    count_label.config(
+                        text=f'{size_hint}空格=暂停 | Enter=完成 | Esc=取消',
+                        bg='#1976D2')
+
+            # 用全局键盘钩子监听空格，覆盖层隐藏时也能响应
+            import keyboard as _kb
+            _kb.add_hotkey('space', lambda: overlay.after(0, on_pause_toggle), suppress=False)
 
             def on_press(e):
                 nonlocal start_x, start_y, rect_id
@@ -9402,7 +9436,43 @@ class OCRApp:
                     canvas.delete(rect_id)
                     rect_id = None
 
+            def on_middle_press(e):
+                """中键按下：记录起始位置，准备拖动滚动"""
+                _mid_drag['active'] = True
+                _mid_drag['last_y'] = e.y
+                _mid_drag['last_x'] = e.x
+                canvas.config(cursor='fleur')
+
+            def on_middle_drag(e):
+                """中键拖动：根据垂直位移滚动底层窗口"""
+                if not _mid_drag['active']:
+                    return
+                import pyautogui
+                dy = e.y - _mid_drag['last_y']
+                dx = e.x - _mid_drag['last_x']
+                # 每移动20px触发一次滚动
+                if abs(dy) >= 20:
+                    clicks = -int(dy / 20)  # 向下拖 → 向下滚（负数）
+                    overlay.attributes('-alpha', 0.0)
+                    overlay.update()
+                    pyautogui.scroll(clicks, x=e.x_root, y=e.y_root)
+                    overlay.attributes('-alpha', 0.25)
+                    _mid_drag['last_y'] = e.y
+                if abs(dx) >= 20:
+                    overlay.attributes('-alpha', 0.0)
+                    overlay.update()
+                    pyautogui.hscroll(-int(dx / 20), x=e.x_root, y=e.y_root)
+                    overlay.attributes('-alpha', 0.25)
+                    _mid_drag['last_x'] = e.x
+
+            def on_middle_release(e):
+                """中键松开"""
+                _mid_drag['active'] = False
+                canvas.config(cursor='cross')
+                overlay.focus_force()
+
             def on_enter(e):
+                _kb.remove_hotkey('space')
                 overlay.destroy()
                 hint_win.destroy()
                 self.root.deiconify()
@@ -9410,6 +9480,7 @@ class OCRApp:
                     self.root.after(200, _preview_and_confirm)
 
             def on_escape(e):
+                _kb.remove_hotkey('space')
                 overlay.destroy()
                 hint_win.destroy()
                 self.root.deiconify()
@@ -9417,8 +9488,15 @@ class OCRApp:
             canvas.bind('<ButtonPress-1>', on_press)
             canvas.bind('<B1-Motion>', on_drag)
             canvas.bind('<ButtonRelease-1>', on_release)
+            canvas.bind('<ButtonPress-2>', on_middle_press)
+            canvas.bind('<B2-Motion>', on_middle_drag)
+            canvas.bind('<ButtonRelease-2>', on_middle_release)
+            canvas.bind('<space>', on_pause_toggle)
             overlay.bind('<Return>', on_enter)
             overlay.bind('<Escape>', on_escape)
+            overlay.bind('<space>', on_pause_toggle)
+            hint_win.bind('<space>', on_pause_toggle)
+            canvas.focus_set()
             overlay.focus_force()
 
         def _preview_and_confirm():
@@ -9490,6 +9568,29 @@ class OCRApp:
             canvas_p.create_image(0, 0, anchor=tk.NW, image=tk_img)
             canvas_p.image = tk_img
             canvas_p.configure(scrollregion=(0, 0, disp_w, disp_h))
+
+            # 滚轮缩放
+            _zoom = [scale]
+
+            def _rescale(new_scale):
+                new_scale = max(0.05, min(new_scale, 5.0))
+                _zoom[0] = new_scale
+                nw = int(w * new_scale)
+                nh = int(h * new_scale)
+                resized = merged.resize((nw, nh), Image.Resampling.LANCZOS)
+                new_photo = ImageTk.PhotoImage(resized)
+                canvas_p.itemconfig(canvas_p.find_all()[0], image=new_photo)
+                canvas_p.image = new_photo
+                canvas_p.configure(scrollregion=(0, 0, nw, nh))
+
+            def _on_wheel(e):
+                factor = 1.15 if e.delta > 0 else (1 / 1.15)
+                _rescale(_zoom[0] * factor)
+
+            canvas_p.bind('<MouseWheel>', _on_wheel)
+
+            tk.Label(info_frame, text='  滚轮缩放',
+                     bg='#F5F5F5', fg='#888', font=('Microsoft YaHei', 9)).pack(side=tk.RIGHT)
 
             # 按钮
             btn_frame = tk.Frame(preview_win)
