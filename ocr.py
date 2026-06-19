@@ -472,130 +472,560 @@ class OCRApp:
         self.root.after(2000, self.check_data_file_size)
 
     def setup_main_interface(self):
-        """设置主界面"""
-        # 创建主标签页
-        self.main_notebook = ttk.Notebook(self.root)
-        self.main_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        # OCR 标签页
-        self.ocr_tab = tk.Frame(self.main_notebook)
-        self.main_notebook.add(self.ocr_tab, text=" 🔍 OCR识别 ")
-        
-        # 数据分类标签页
-        self.classifier_tab = tk.Frame(self.main_notebook)
-        self.main_notebook.add(self.classifier_tab, text=" 📊 数据分类 ")
-        
-        # 设置 OCR 标签页
+        """设置主界面 — 左侧导航栏 + 顶部标题栏 + 右侧主体"""
+        self.root.configure(bg='#F0F4F8')
+
+        # ── 顶部标题栏 ──
+        title_bar = tk.Frame(self.root, bg='#1A6FD4', height=48)
+        title_bar.pack(fill=tk.X, side=tk.TOP)
+        title_bar.pack_propagate(False)
+
+        # logo + 标题
+        logo_lbl = tk.Label(title_bar, text='⊙', bg='#1A6FD4', fg='white',
+                            font=('Microsoft YaHei', 20, 'bold'))
+        logo_lbl.pack(side=tk.LEFT, padx=(14, 6), pady=6)
+        tk.Label(title_bar, text='OCR 数据分类工具', bg='#1A6FD4', fg='white',
+                 font=('Microsoft YaHei', 13, 'bold')).pack(side=tk.LEFT, pady=6)
+
+        # 右侧按钮
+        for icon, tip, cmd in [
+            ('⚙', '设置', self.show_api_key_settings),
+            ('?', '帮助', lambda: messagebox.showinfo('帮助', '使用左侧导航切换功能页面')),
+        ]:
+            btn = tk.Label(title_bar, text=icon, bg='#1A6FD4', fg='white',
+                           font=('Microsoft YaHei', 13), cursor='hand2', padx=12)
+            btn.pack(side=tk.RIGHT, pady=6)
+            btn.bind('<Button-1>', lambda e, c=cmd: c())
+            btn.bind('<Enter>', lambda e, b=btn: b.config(bg='#1559B0'))
+            btn.bind('<Leave>', lambda e, b=btn: b.config(bg='#1A6FD4'))
+
+        # 数据导入按钮（替换原设置按钮位置）
+        import_btn = tk.Label(title_bar, text='📋 导入数据', bg='#1A6FD4', fg='white',
+                              font=('Microsoft YaHei', 10), cursor='hand2', padx=14)
+        import_btn.pack(side=tk.RIGHT, pady=6)
+        import_btn.bind('<Button-1>', lambda e: self._show_import_dialog())
+        import_btn.bind('<Enter>', lambda e: import_btn.config(bg='#1559B0'))
+        import_btn.bind('<Leave>', lambda e: import_btn.config(bg='#1A6FD4'))
+
+        # 全局重置按钮
+        reset_btn = tk.Label(title_bar, text='↩ 重置', bg='#1A6FD4', fg='white',
+                             font=('Microsoft YaHei', 10), cursor='hand2', padx=14)
+        reset_btn.pack(side=tk.RIGHT, pady=6)
+        reset_btn.bind('<Button-1>', lambda e: self.clear_all_data())
+        reset_btn.bind('<Enter>', lambda e: reset_btn.config(bg='#1559B0'))
+        reset_btn.bind('<Leave>', lambda e: reset_btn.config(bg='#1A6FD4'))
+
+        # 字号选择
+        font_frame = tk.Frame(title_bar, bg='#1A6FD4')
+        font_frame.pack(side=tk.RIGHT, padx=(0, 4), pady=6)
+        tk.Label(font_frame, text='字号', bg='#1A6FD4', fg='white',
+                 font=('Microsoft YaHei', 9)).pack(side=tk.LEFT, padx=(8, 4))
+        self.combo_font = ttk.Combobox(font_frame, values=[str(i) for i in range(8, 31)],
+                                       width=4, state='readonly',
+                                       font=('Microsoft YaHei', 9))
+        self.combo_font.set(str(self.current_font_size))
+        self.combo_font.pack(side=tk.LEFT)
+        self.combo_font.bind('<<ComboboxSelected>>', self.on_font_combo_change)
+
+        # ── 主体：左侧导航 + 右侧内容 ──
+        body = tk.Frame(self.root, bg='#F0F4F8')
+        body.pack(fill=tk.BOTH, expand=True)
+
+        # ── 左侧导航栏 ──
+        nav_bg = '#1E2A3A'
+        nav = tk.Frame(body, bg=nav_bg, width=130)
+        nav.pack(side=tk.LEFT, fill=tk.Y)
+        nav.pack_propagate(False)
+
+        # 右侧内容区
+        self._content_area = tk.Frame(body, bg='white')
+        self._content_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # 合并页：只用一个 frame，内部用步骤标签切换
+        self.main_notebook = ttk.Notebook(self._content_area)
+        self.main_notebook.pack(fill=tk.BOTH, expand=True)
+
+        self.ocr_tab = tk.Frame(self.main_notebook, bg='white')
+        self.main_notebook.add(self.ocr_tab, text=' OCR ')
+
+        # classifier_tab 指向同一个 ocr_tab，供旧代码引用
+        self.classifier_tab = self.ocr_tab
+
+        # ── 导航菜单项 ──
+        self._nav_buttons = {}
+        nav_items = [
+            ('🏠', '首页',    self._nav_home),
+            ('▦',  'OCR识别', lambda: self._nav_switch(0)),
+            ('📊', '统计',    self.show_stats),
+            ('📜', '历史',    self.show_history),
+            ('🔑', '密钥',    self.show_api_key_settings),
+            ('🔓', '解锁',    self.unlock_size_limit),
+        ]
+
+        tk.Frame(nav, bg=nav_bg, height=16).pack()  # 顶部间距
+
+        for icon, label, cmd in nav_items:
+            item = tk.Frame(nav, bg=nav_bg, cursor='hand2')
+            item.pack(fill=tk.X, pady=1)
+
+            icon_lbl = tk.Label(item, text=icon, bg=nav_bg, fg='#A8C4E0',
+                                font=('Microsoft YaHei', 14), width=3)
+            icon_lbl.pack(side=tk.LEFT, padx=(10, 2), pady=10)
+            text_lbl = tk.Label(item, text=label, bg=nav_bg, fg='#C8D8E8',
+                                font=('Microsoft YaHei', 9), anchor='w')
+            text_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            # 左侧高亮条
+            bar = tk.Frame(item, bg=nav_bg, width=4)
+            bar.pack(side=tk.LEFT)
+
+            def _on_enter(e, f=item, il=icon_lbl, tl=text_lbl):
+                f.config(bg='#243447'); il.config(bg='#243447'); tl.config(bg='#243447')
+
+            def _on_leave(e, f=item, il=icon_lbl, tl=text_lbl, b=bar, lbl=label):
+                active = getattr(self, '_active_nav', '')
+                bg = '#1A6FD4' if active == lbl else nav_bg
+                f.config(bg=bg); il.config(bg=bg); tl.config(bg=bg)
+
+            def _on_click(e, c=cmd, lbl=label):
+                self._set_active_nav(lbl)
+                c()
+
+            for w in (item, icon_lbl, text_lbl):
+                w.bind('<Enter>', _on_enter)
+                w.bind('<Leave>', _on_leave)
+                w.bind('<Button-1>', _on_click)
+
+            self._nav_buttons[label] = (item, icon_lbl, text_lbl, bar)
+
+        # 底部状态栏
+        status_bar = tk.Frame(nav, bg=nav_bg)
+        status_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=8)
+        self._status_dot = tk.Label(status_bar, text='●', bg=nav_bg, fg='#4CAF50',
+                                    font=('Arial', 10))
+        self._status_dot.pack(side=tk.LEFT, padx=(14, 4))
+        tk.Label(status_bar, text='就绪', bg=nav_bg, fg='#7A9AB8',
+                 font=('Microsoft YaHei', 8)).pack(side=tk.LEFT)
+
+        # 默认激活 OCR识别
+        self._set_active_nav('OCR识别')
+
+        # 设置合并页内容
         self.setup_ocr_tab()
-        
-        # 设置数据分类标签页
-        self.setup_classifier_tab()
+
+    def _set_active_nav(self, label):
+        """设置当前激活的导航项"""
+        self._active_nav = label
+        nav_bg = '#1E2A3A'
+        for lbl, (item, icon_lbl, text_lbl, bar) in self._nav_buttons.items():
+            if lbl == label:
+                item.config(bg='#1A6FD4')
+                icon_lbl.config(bg='#1A6FD4', fg='white')
+                text_lbl.config(bg='#1A6FD4', fg='white')
+                bar.config(bg='white')
+            else:
+                item.config(bg=nav_bg)
+                icon_lbl.config(bg=nav_bg, fg='#A8C4E0')
+                text_lbl.config(bg=nav_bg, fg='#C8D8E8')
+                bar.config(bg=nav_bg)
+
+    def _show_import_dialog(self):
+        """顶部导入数据弹窗"""
+        win = tk.Toplevel(self.root)
+        win.title('导入数据')
+        win.transient(self.root)
+        win.grab_set()
+        win.configure(bg='white')
+
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        w, h = 520, 420
+        win.geometry(f'{w}x{h}+{sw-w-20}+52')  # 右上角，标题栏下方
+        win.resizable(False, True)
+
+        # 标题
+        tk.Label(win, text='粘贴并解析数据', bg='white', fg='#111827',
+                 font=('Microsoft YaHei', 12, 'bold')).pack(anchor='w', padx=18, pady=(14, 4))
+        tk.Label(win, text='格式：名称|Y|X|高度  每行一条',
+                 bg='white', fg='#9CA3AF',
+                 font=('Microsoft YaHei', 9)).pack(anchor='w', padx=18, pady=(0, 8))
+
+        # 文本框
+        txt = tk.Text(win, font=('Consolas', 10), relief='flat',
+                      highlightthickness=1, highlightbackground='#DDE3EA',
+                      bg='#F9FAFB', wrap=tk.NONE)
+        txt.pack(fill=tk.BOTH, expand=True, padx=18, pady=(0, 10))
+
+        # 自动粘贴剪贴板内容
+        try:
+            clip = self.root.clipboard_get()
+            if clip.strip():
+                txt.insert('1.0', clip)
+        except Exception:
+            pass
+
+        # 底部按钮
+        btn_row = tk.Frame(win, bg='white')
+        btn_row.pack(fill=tk.X, padx=18, pady=(0, 14))
+
+        def do_parse():
+            content = txt.get('1.0', tk.END).strip()
+            if not content:
+                return
+            if hasattr(self, 'text_input'):
+                self.text_input.delete('1.0', tk.END)
+                self.text_input.insert(tk.END, content)
+            self.load_from_text()
+            win.destroy()
+
+        tk.Button(btn_row, text='解析数据', command=do_parse,
+                  bg='#1A6FD4', fg='white', relief='flat',
+                  font=('Microsoft YaHei', 10, 'bold'),
+                  padx=20, pady=6, cursor='hand2').pack(side=tk.LEFT)
+        tk.Button(btn_row, text='取消', command=win.destroy,
+                  bg='#F3F4F6', fg='#374151', relief='flat',
+                  font=('Microsoft YaHei', 10),
+                  padx=20, pady=6, cursor='hand2').pack(side=tk.LEFT, padx=(8, 0))
+
+        win.bind('<Return>', lambda e: do_parse())
+        win.bind('<Escape>', lambda e: win.destroy())
+        txt.focus_set()
+
+    def _nav_home(self):
+        """首页：切换到OCR识别页"""
+        self._nav_switch(0)
+
+    def _nav_switch(self, index):
+        """切换主内容区标签页"""
+        self.main_notebook.select(index)
+
 
     def setup_ocr_tab(self):
-        """设置 OCR 标签页"""
-        # ========== Ribbon 功能区 ==========
-        ribbon_frame = tk.Frame(self.ocr_tab, bg="#f0f0f0", relief=tk.RAISED, bd=1)
-        ribbon_frame.pack(fill=tk.X, padx=0, pady=0)
-        
-        # Ribbon 内容框架
-        ribbon_content = tk.Frame(ribbon_frame, bg="#f0f0f0")
-        ribbon_content.pack(fill=tk.X, padx=10, pady=8)
-        
-        # === 文件组 ===
-        file_group = self._create_ribbon_group(ribbon_content, "文件")
-        self.select_btn = self._create_ribbon_button(file_group, "📁\n选择图片", self.select_file, 
-                                                      "#4CAF50", large=True)
-        
-        # === 识别组 ===
-        ocr_group = self._create_ribbon_group(ribbon_content, "识别")
-        self.ocr_btn = self._create_ribbon_button(ocr_group, "🔍\n高精度", self.perform_ocr, 
-                                                   "#2196F3", state=tk.DISABLED)
-        self.quick_ocr_btn = self._create_ribbon_button(ocr_group, "⚡\n快速", self.perform_quick_ocr, 
-                                                         "#00BCD4", state=tk.DISABLED)
-        self.general_ocr_btn = self._create_ribbon_button(ocr_group, "📄\n通用", self.perform_general_ocr, 
-                                                           "#9C27B0", state=tk.DISABLED)
-        
-        # === 图片处理组 ===
-        image_group = self._create_ribbon_group(ribbon_content, "图片处理")
-        self.merge_btn = self._create_ribbon_button(image_group, "🖼️\n拼接", self.merge_images, "#FF9800")
-        self.crop_merge_btn = self._create_ribbon_button(image_group, "✂️\n裁剪", self.crop_and_merge_direct, "#FF6F00")
-        self.screenshot_btn = self._create_ribbon_button(image_group, "📷\n截图", self.start_screenshot_capture, "#1976D2")
-        
-        # === 结果操作组 ===
-        result_group = self._create_ribbon_group(ribbon_content, "结果操作")
-        self.copy_btn = self._create_ribbon_button(result_group, "📋\n复制解析", self.copy_and_parse_text,
-                                                    "#607D8B", state=tk.DISABLED)
-        self.add_zeros_btn = self._create_ribbon_button(result_group, "➕\n加|0|0", self.add_zeros_to_lines, 
-                                                         "#9C27B0", state=tk.DISABLED)
-        self.export_btn = self._create_ribbon_button(result_group, "💾\n导出", self.export_results, 
-                                                      "#FF5722", state=tk.DISABLED)
-        self.clear_btn = self._create_ribbon_button(result_group, "🗑️\n清空", self.clear_result, "#757575")
-        
-        # === 数据查看组 ===
-        data_group = self._create_ribbon_group(ribbon_content, "数据")
-        self.stats_btn = self._create_ribbon_button(data_group, "📊\n统计", self.show_stats, "#3F51B5")
-        self.history_btn = self._create_ribbon_button(data_group, "📜\n历史", self.show_history, "#00897B")
-        
-        # === 设置组 ===
-        settings_group = self._create_ribbon_group(ribbon_content, "设置")
-        self.api_key_btn = self._create_ribbon_button(settings_group, "🔑\n密钥", self.show_api_key_settings, "#673AB7")
-        self.unlock_btn = self._create_ribbon_button(settings_group, "🔓\n解锁", self.unlock_size_limit, "#E91E63")
-        
-        # 拖拽选择区
-        self.drop_zone = tk.Frame(self.ocr_tab, bg="#EAF4FF", relief=tk.GROOVE, bd=2, cursor="hand2")
-        self.drop_zone.pack(fill=tk.X, padx=10, pady=(8, 0))
+        """合并页面 — 左侧操作面板 + 顶部4步骤标签 + 右侧内容区"""
+        BG = 'white'
+        PANEL_BG = '#F7F9FC'
+        BORDER = '#DDE3EA'
+        BLUE = '#1A6FD4'
 
-        self.file_label = tk.Label(
-            self.drop_zone,
-            text="未选择文件 | 拖入图片到这里，或点击选择图片",
-            fg="#1E5A8A",
-            wraplength=1350,
-            bg="#EAF4FF",
-            pady=12,
-            font=("Microsoft YaHei", 10, "bold"),
-            cursor="hand2"
-        )
-        self.file_label.pack(fill=tk.X, padx=8)
-        self.drop_zone.bind("<Button-1>", lambda event: self.select_file())
-        self.file_label.bind("<Button-1>", lambda event: self.select_file())
-        
-        # 进度条
-        self.progress_frame = tk.Frame(self.ocr_tab)
-        self.progress_frame.pack(fill=tk.X, padx=20, pady=5)
-        
-        self.progress_label = tk.Label(self.progress_frame, text="", fg="blue")
-        self.progress_label.pack(side=tk.LEFT)
-        
-        # 提示信息
+        self.ocr_tab.configure(bg=BG)
+
+        # ── 左右分栏 ──
+        self._ocr_left = tk.Frame(self.ocr_tab, bg=PANEL_BG, width=230,
+                                  highlightthickness=1, highlightbackground=BORDER)
+        self._ocr_left.pack(side=tk.LEFT, fill=tk.Y)
+        self._ocr_left.pack_propagate(False)
+
+        main_right = tk.Frame(self.ocr_tab, bg=BG)
+        main_right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # ── 顶部4步骤标签栏 ──
+        step_bar = tk.Frame(main_right, bg=BG,
+                            highlightthickness=1, highlightbackground=BORDER)
+        step_bar.pack(fill=tk.X)
+        step_inner = tk.Frame(step_bar, bg=BG)
+        step_inner.pack(fill=tk.X, padx=16, pady=0)
+
+        self._step_btns = {}
+        steps = [
+            ('导入/OCR识别', '导入图片并识别文字'),
+            ('交互绘图',     '标注识别区域'),
+            ('分类表格',     '生成结构化数据'),
+            ('文本报告',     '生成识别报告'),
+        ]
+
+        for i, (name, sub) in enumerate(steps):
+            col = tk.Frame(step_inner, bg=BG)
+            col.pack(side=tk.LEFT)
+            num_lbl = tk.Label(col, text=f' {i+1} ', bg='#E5E7EB', fg='#6B7280',
+                               font=('Microsoft YaHei', 9, 'bold'), padx=6, pady=2)
+            num_lbl.pack(side=tk.LEFT, padx=(0, 6), pady=10)
+            txt_col = tk.Frame(col, bg=BG)
+            txt_col.pack(side=tk.LEFT, pady=6)
+            name_lbl = tk.Label(txt_col, text=name, bg=BG, fg='#6B7280',
+                                font=('Microsoft YaHei', 9, 'bold'), cursor='hand2')
+            name_lbl.pack(anchor='w')
+            sub_lbl = tk.Label(txt_col, text=sub, bg=BG, fg='#9CA3AF',
+                               font=('Microsoft YaHei', 7))
+            sub_lbl.pack(anchor='w')
+            bar = tk.Frame(col, bg=BG, height=3)
+            bar.pack(fill=tk.X)
+            self._step_btns[name] = (col, num_lbl, name_lbl, sub_lbl, bar)
+            for w in (col, num_lbl, name_lbl, sub_lbl):
+                w.bind('<Button-1>', lambda e, n=name, ix=i: self._step_switch(n, ix))
+            if i < len(steps) - 1:
+                tk.Label(step_inner, text='›', bg=BG, fg='#D1D5DB',
+                         font=('Arial', 14)).pack(side=tk.LEFT, padx=6)
+
+        # ── 右侧内容区 ──
+        self._right_content = tk.Frame(main_right, bg=BG)
+        self._right_content.pack(fill=tk.BOTH, expand=True)
+
+        self._page_ocr        = tk.Frame(self._right_content, bg=BG)
+        self.tab_plt          = tk.Frame(self._right_content, bg=BG)
+        self.tab_res          = tk.Frame(self._right_content, bg=BG)
+        self.tab_report_outer = tk.Frame(self._right_content, bg=BG)
+
+        self._classifier_pages = {
+            '导入/OCR识别': self._page_ocr,
+            '交互绘图':     self.tab_plt,
+            '分类表格':     self.tab_res,
+            '文本报告':     self.tab_report_outer,
+        }
+
+        self._build_left_ocr_panel(PANEL_BG, BORDER, BLUE)
+        self._build_ocr_preview_page(BG, BORDER)
+        self.setup_plot_placeholder()
+        self.setup_results_tab()
+        self._setup_drag_drop()
+        self.image_paths = []
+        self.all_results = []
+        self._update_ocr_btn_by_keys()
+        self._step_switch('导入/OCR识别', 0)
+
+    def _build_left_ocr_panel(self, PANEL_BG, BORDER, BLUE):
+        """构建左侧操作面板"""
+        left_panel = self._ocr_left
+
+        def section(parent, title):
+            f = tk.Frame(parent, bg=PANEL_BG)
+            f.pack(fill=tk.X, padx=14, pady=(12, 0))
+            tk.Label(f, text=title, bg=PANEL_BG, fg='#374151',
+                     font=('Microsoft YaHei', 9, 'bold')).pack(anchor='w', pady=(0, 6))
+            return f
+
+        sec1 = section(left_panel, '1. 导入图片')
+        drop_zone = tk.Frame(sec1, bg='white', highlightthickness=1,
+                             highlightbackground=BORDER, cursor='hand2')
+        drop_zone.pack(fill=tk.X)
+        self.drop_zone = drop_zone
+        tk.Label(drop_zone, text='🖼', bg='white', fg='#9CA3AF',
+                 font=('Arial', 22)).pack(pady=(14, 4))
+        self.file_label = tk.Label(drop_zone, text='拖拽图片到此处\n或',
+                                   bg='white', fg='#9CA3AF',
+                                   font=('Microsoft YaHei', 9), justify='center')
+        self.file_label.pack()
+        self.select_btn = tk.Button(drop_zone, text='选择图片',
+                                    command=self.select_file,
+                                    bg=BLUE, fg='white', relief='flat',
+                                    font=('Microsoft YaHei', 9, 'bold'),
+                                    padx=18, pady=5, cursor='hand2')
+        self.select_btn.pack(pady=(6, 14))
+        tk.Label(sec1, text='支持 JPG / PNG / BMP / TIFF',
+                 bg=PANEL_BG, fg='#9CA3AF',
+                 font=('Microsoft YaHei', 8)).pack(anchor='w', pady=(4, 0))
+
+        self.progress_frame = tk.Frame(left_panel, bg=PANEL_BG)
+        self.progress_frame.pack(fill=tk.X, padx=14, pady=(6, 0))
+        self.progress_label = tk.Label(self.progress_frame, text='',
+                                       bg=PANEL_BG, fg='#2563EB',
+                                       font=('Microsoft YaHei', 8),
+                                       wraplength=190, justify='left')
+        self.progress_label.pack(anchor='w')
         acc_range = f"{self.size_limits['accurate_min_width']}~{self.size_limits['accurate_max_width']}x{self.size_limits['accurate_min_height']}~{self.size_limits['accurate_max_height']}"
         bas_range = f"{self.size_limits['basic_min_width']}~{self.size_limits['basic_max_width']}x{self.size_limits['basic_min_height']}~{self.size_limits['basic_max_height']}"
         gen_range = f"{self.size_limits['general_min_width']}~{self.size_limits['general_max_width']}x{self.size_limits['general_min_height']}~{self.size_limits['general_max_height']}"
-        self.size_hint_label = tk.Label(self.progress_frame, text=f"💡 高精度({acc_range}) | 快速({bas_range}) | 通用({gen_range})", 
-                fg="gray", font=("Arial", 9))
-        self.size_hint_label.pack(side=tk.RIGHT, padx=10)
-        
-        # 结果显示区域
-        result_label = tk.Label(self.ocr_tab, text="识别结果：", font=("Arial", 12, "bold"))
-        result_label.pack(pady=(10, 5))
-        
-        self.result_text = scrolledtext.ScrolledText(self.ocr_tab, width=160, height=40, 
-                                                      font=("Microsoft YaHei", 11))
-        self.result_text.pack(padx=20, pady=10, fill=tk.BOTH, expand=True)
-        
-        # 添加右键菜单
-        self.context_menu = tk.Menu(self.result_text, tearoff=0)
-        self.context_menu.add_command(label="复制选中内容", command=self.copy_selected)
-        self.context_menu.add_command(label="复制全部（文字+位置）", command=self.copy_all_text)
-        self.context_menu.add_separator()
-        self.context_menu.add_command(label="全选", command=self.select_all)
-        
-        self.result_text.bind("<Button-3>", self.show_context_menu)
-        
-        self.image_paths = []  # 存储多个图片路径
-        self.all_results = []  # 存储所有识别结果
+        self.size_hint_label = tk.Label(self.progress_frame,
+                                        text=f"高精度({acc_range})\n快速({bas_range})\n通用({gen_range})",
+                                        bg=PANEL_BG, fg='#9CA3AF',
+                                        font=('Microsoft YaHei', 7), justify='left')
+        self.size_hint_label.pack(anchor='w', pady=(2, 0))
 
-        # 根据密钥配置初始化按钮状态
-        self._update_ocr_btn_by_keys()
+        sec2 = section(left_panel, '2. 识别设置')
+        tk.Label(sec2, text='识别模式', bg=PANEL_BG, fg='#6B7280',
+                 font=('Microsoft YaHei', 8)).pack(anchor='w', pady=(0, 4))
+        mode_row = tk.Frame(sec2, bg=PANEL_BG)
+        mode_row.pack(fill=tk.X)
+
+        def _mode_btn(text, cmd, state=tk.NORMAL):
+            b = tk.Button(mode_row, text=text, command=cmd,
+                          bg=BLUE, fg='white', relief='flat',
+                          font=('Microsoft YaHei', 8, 'bold'),
+                          padx=6, pady=5, cursor='hand2', state=state)
+            b.pack(side=tk.LEFT, padx=(0, 4))
+            return b
+
+        self.ocr_btn         = _mode_btn('高精度', self.perform_ocr,         tk.DISABLED)
+        self.quick_ocr_btn   = _mode_btn('快速',   self.perform_quick_ocr,   tk.DISABLED)
+        self.general_ocr_btn = _mode_btn('通用',   self.perform_general_ocr, tk.DISABLED)
+
+        sec3 = section(left_panel, '3. 图片处理')
+        proc_row = tk.Frame(sec3, bg=PANEL_BG)
+        proc_row.pack(fill=tk.X)
+        for text, cmd in [('拼接', self.merge_images),
+                           ('截图', self.start_screenshot_capture),
+                           ('裁剪', self.crop_and_merge_direct)]:
+            tk.Button(proc_row, text=text, command=cmd,
+                      bg='white', fg='#374151', relief='flat',
+                      highlightthickness=1, highlightbackground=BORDER,
+                      font=('Microsoft YaHei', 8), padx=8, pady=5,
+                      cursor='hand2').pack(side=tk.LEFT, padx=(0, 4))
+        self.merge_btn      = proc_row.winfo_children()[0]
+        self.screenshot_btn = proc_row.winfo_children()[1]
+        self.crop_merge_btn = proc_row.winfo_children()[2]
+
+        tk.Frame(left_panel, bg=BORDER, height=1).pack(fill=tk.X, padx=14, pady=14)
+        self.copy_btn = tk.Button(left_panel, text='▶  开始识别（复制解析）',
+                                  command=self.copy_and_parse_text,
+                                  bg=BLUE, fg='white', relief='flat',
+                                  font=('Microsoft YaHei', 10, 'bold'),
+                                  pady=10, cursor='hand2', state=tk.DISABLED)
+        self.copy_btn.pack(fill=tk.X, padx=14, pady=(0, 6))
+
+        aux_row = tk.Frame(left_panel, bg=PANEL_BG)
+        aux_row.pack(fill=tk.X, padx=14)
+        for text, cmd in [('加|0|0', self.add_zeros_to_lines),
+                           ('导出',   self.export_results),
+                           ('清空',   self.clear_result)]:
+            tk.Button(aux_row, text=text, command=cmd,
+                      bg='white', fg='#374151', relief='flat',
+                      highlightthickness=1, highlightbackground=BORDER,
+                      font=('Microsoft YaHei', 8), padx=6, pady=4,
+                      cursor='hand2').pack(side=tk.LEFT, padx=(0, 4))
+        self.add_zeros_btn = aux_row.winfo_children()[0]
+        self.export_btn    = aux_row.winfo_children()[1]
+        self.clear_btn     = aux_row.winfo_children()[2]
+
+        # 绘图模式（步骤2时显示）
+        self._left_plot_section = tk.Frame(left_panel, bg=PANEL_BG)
+        tk.Label(self._left_plot_section, text='绘图模式切换',
+                 bg=PANEL_BG, fg='#374151',
+                 font=('Microsoft YaHei', 9, 'bold')).pack(
+                     anchor='w', padx=14, pady=(16, 6))
+        for text, val in [('🖱 直线模式（左键加线/右键删线）', False),
+                           ('🎯 圈选模式（画圈提取数据）', True)]:
+            tk.Radiobutton(self._left_plot_section, text=text,
+                           variable=self.enable_lasso_mode, value=val,
+                           command=self.update_plot_view,
+                           bg=PANEL_BG, font=('Microsoft YaHei', 9),
+                           wraplength=190, justify='left').pack(
+                               anchor='w', padx=16, pady=4)
+
+        self._left_ocr_widgets = [sec1, self.progress_frame, sec2, sec3]
+
+    def _build_ocr_preview_page(self, BG, BORDER):
+        """构建步骤1识别结果预览页"""
+        page = self._page_ocr
+        top_bar = tk.Frame(page, bg=BG)
+        top_bar.pack(fill=tk.X, padx=16, pady=(14, 6))
+        self._ocr_preview_title = tk.Label(top_bar, text='识别结果预览',
+                                           bg=BG, fg='#111827',
+                                           font=('Microsoft YaHei', 12, 'bold'))
+        self._ocr_preview_title.pack(side=tk.LEFT)
+
+        self.result_text = scrolledtext.ScrolledText(page, width=1, height=1,
+                                                     font=('Microsoft YaHei', 10))
+        self.result_text.pack_forget()
+        self.context_menu = tk.Menu(self.result_text, tearoff=0)
+        self.context_menu.add_command(label='复制选中内容', command=self.copy_selected)
+        self.context_menu.add_command(label='复制全部（文字+位置）', command=self.copy_all_text)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label='全选', command=self.select_all)
+        self.result_text.bind('<Button-3>', self.show_context_menu)
+
+        tbl_frame = tk.Frame(page, bg=BG)
+        tbl_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 12))
+        vsb = ttk.Scrollbar(tbl_frame, orient=tk.VERTICAL)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._preview_tree = ttk.Treeview(
+            tbl_frame,
+            columns=('cat', 'label', 'c_group', 'group'),
+            show='headings', yscrollcommand=vsb.set)
+        vsb.config(command=self._preview_tree.yview)
+        self._preview_tree.heading('cat',     text='分类')
+        self._preview_tree.heading('label',   text='名称')
+        self._preview_tree.heading('c_group', text='C组')
+        self._preview_tree.heading('group',   text='组')
+        self._preview_tree.column('cat',     width=80,  anchor='center')
+        self._preview_tree.column('label',   width=320, anchor='w')
+        self._preview_tree.column('c_group', width=60,  anchor='center')
+        self._preview_tree.column('group',   width=60,  anchor='center')
+        self._preview_tree.pack(fill=tk.BOTH, expand=True)
+        bottom = tk.Frame(page, bg=BG)
+        bottom.pack(fill=tk.X, padx=16, pady=(0, 8))
+        self._preview_count_lbl = tk.Label(bottom, text='', bg=BG, fg='#6B7280',
+                                           font=('Microsoft YaHei', 9))
+        self._preview_count_lbl.pack(side=tk.LEFT)
+
+    def _step_switch(self, name, index):
+        """切换步骤标签页，同时切换左侧面板"""
+        BLUE = '#1A6FD4'
+        BG = 'white'
+        self._current_step = name
+        for n, (col, num_lbl, name_lbl, sub_lbl, bar) in self._step_btns.items():
+            if n == name:
+                num_lbl.config(bg=BLUE, fg='white')
+                name_lbl.config(fg=BLUE)
+                bar.config(bg=BLUE)
+            else:
+                num_lbl.config(bg='#E5E7EB', fg='#6B7280')
+                name_lbl.config(fg='#6B7280')
+                bar.config(bg=BG)
+
+        for frame in self._classifier_pages.values():
+            frame.pack_forget()
+        self._classifier_pages[name].pack(fill=tk.BOTH, expand=True)
+
+        # 切换左侧面板
+        self._left_plot_section.pack_forget()
+        for w in self._left_ocr_widgets:
+            w.pack_forget()
+        self.copy_btn.pack_forget()
+        if hasattr(self, 'add_zeros_btn'):
+            self.add_zeros_btn.master.pack_forget()
+
+        if name == '导入/OCR识别':
+            for w in self._left_ocr_widgets:
+                w.pack(fill=tk.X, padx=14, pady=(12, 0))
+            self.copy_btn.pack(fill=tk.X, padx=14, pady=(6, 4))
+            self.add_zeros_btn.master.pack(fill=tk.X, padx=14)
+        elif name == '交互绘图':
+            self._left_plot_section.pack(fill=tk.X)
+            if not self.plot_initialized:
+                self.setup_plot_tab()
+
+    def setup_left_panel(self):
+        """左侧面板 — 内容随步骤动态切换"""
+        PANEL_BG = '#F7F9FC'
+        BORDER = '#DDE3EA'
+        BLUE = '#1A6FD4'
+        self.left_panel.configure(bg=PANEL_BG)
+
+        # text_input 保留但隐藏（load_from_text 需要它）
+        self.text_input = tk.Text(self.left_panel, height=1,
+                                  font=('Consolas', 10))
+        # 不 pack，仅作数据中转用
+
+        # ── ① 分类表格页面板（空，顶部已有重置和字号）──
+        self._panel_tree = tk.Frame(self.left_panel, bg=PANEL_BG)
+
+        # ── ② 交互绘图页面板 ──
+        self._panel_plot = tk.Frame(self.left_panel, bg=PANEL_BG)
+
+        def sec(parent, title):
+            tk.Label(parent, text=title, bg=PANEL_BG, fg='#374151',
+                     font=('Microsoft YaHei', 9, 'bold')).pack(
+                         anchor='w', padx=16, pady=(16, 6))
+
+        sec(self._panel_plot, '绘图模式切换')
+        for text, val in [
+            ('🖱 直线模式（左键加线/右键删线）', False),
+            ('🎯 圈选模式（画圈提取数据）',       True),
+        ]:
+            tk.Radiobutton(self._panel_plot, text=text,
+                           variable=self.enable_lasso_mode, value=val,
+                           command=self.update_plot_view,
+                           bg=PANEL_BG, font=('Microsoft YaHei', 9),
+                           wraplength=190, justify='left').pack(
+                               anchor='w', padx=16, pady=4)
+
+        # ③ 文本报告页无面板（_panel_report 为空占位）
+        self._panel_report = tk.Frame(self.left_panel, bg=PANEL_BG)
+
+        self._left_panels = {
+            '分类表格': self._panel_tree,
+            '交互绘图': self._panel_plot,
+            '文本报告': self._panel_report,
+        }
+
 
     def _update_ocr_btn_by_keys(self):
         """根据密钥配置更新三个识别按钮的可用状态"""
@@ -610,7 +1040,6 @@ class OCRApp:
         if hasattr(self, 'general_ocr_btn'):
             self.general_ocr_btn.config(state=tk.NORMAL if has_general else tk.DISABLED)
 
-        # 更新提示
         hints = []
         if not has_accurate:
             hints.append("高精度")
@@ -633,181 +1062,152 @@ class OCRApp:
             return bool(API_KEY_GENERAL and SECRET_KEY_GENERAL)
         return False
 
-    def setup_classifier_tab(self):
-        """设置数据分类标签页"""
-        # 左侧面板
-        self.left_panel = tk.Frame(self.classifier_tab, width=420, bg="#f0f0f0")
-        self.left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
-        
-        # 右侧面板
-        self.right_panel = tk.Frame(self.classifier_tab, bg="white")
-        self.right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        # 右侧标签页
-        self.classifier_notebook = ttk.Notebook(self.right_panel)
-        self.classifier_notebook.pack(fill=tk.BOTH, expand=True)
-        
-        # 分类结果标签页
-        self.tab_res = tk.Frame(self.classifier_notebook)
-        self.classifier_notebook.add(self.tab_res, text=" 📊 分类结果与报告 ")
-        
-        # 交互绘图标签页
-        self.tab_plt = tk.Frame(self.classifier_notebook, bg="white")
-        self.classifier_notebook.add(self.tab_plt, text=" 📈 交互绘图区 ")
-        
-        # 初始化各个模块
-        self.setup_left_panel()
-        self.setup_results_tab()
-        self.setup_plot_placeholder()
-        self.classifier_notebook.bind("<<NotebookTabChanged>>", self.on_classifier_tab_changed)
-        self.apply_font_style()
-        self.install_group_shortcut_bindings()
-
-    def setup_left_panel(self):
-        """设置左侧控制面板"""
-        # 0. 全局设置 (字号下拉框)
-        settings_frame = tk.LabelFrame(self.left_panel, text="0. 全局字号设置", padx=10, pady=8, font=("", 10, "bold"),
-                                       fg="purple")
-        settings_frame.pack(fill=tk.X, pady=5)
-        tk.Label(settings_frame, text="界面字号:").pack(side=tk.LEFT)
-        self.combo_font = ttk.Combobox(settings_frame, values=[str(i) for i in range(8, 31)], width=5, state="readonly")
-        self.combo_font.set(str(self.current_font_size))
-        self.combo_font.pack(side=tk.LEFT, padx=5)
-        self.combo_font.bind("<<ComboboxSelected>>", self.on_font_combo_change)
-
-        # 1. 数据导入
-        control_frame = tk.LabelFrame(self.left_panel, text="1. 数据导入", padx=10, pady=10)
-        control_frame.pack(fill=tk.X, pady=5)
-        self.text_input = tk.Text(control_frame, height=10, width=40, font=("Consolas", 10))
-        self.text_input.pack(fill=tk.X, pady=5)
-        tk.Button(control_frame, text="📋 粘贴并解析数据", command=self.load_from_text, bg="#e1f5fe",
-                  font=("", 10, "bold")).pack(fill=tk.X)
-
-        # 2. 交互模式
-        mode_frame = tk.LabelFrame(self.left_panel, text="2. 绘图模式切换", padx=10, pady=10, fg="blue")
-        mode_frame.pack(fill=tk.X, pady=10)
-        tk.Radiobutton(mode_frame, text="🖱️ 直线模式 (左键加线/右键删线)", variable=self.enable_lasso_mode, value=False,
-                       command=self.update_plot_view).pack(anchor="w")
-        tk.Radiobutton(mode_frame, text="🎯 圈选模式 (画圈提取数据)", variable=self.enable_lasso_mode, value=True,
-                       command=self.update_plot_view).pack(anchor="w")
-
-        # 3. 操作
-        op_frame = tk.LabelFrame(self.left_panel, text="3. 全局重置", padx=10, pady=10)
-        op_frame.pack(fill=tk.X, pady=10)
-        tk.Button(op_frame, text="↩️ 重置为粘贴解析后的状态", command=self.clear_all_data, bg="#ffdddd").pack(fill=tk.X)
-
     def setup_results_tab(self):
-        """设置分类结果标签页"""
-        self.inner_nb = ttk.Notebook(self.tab_res)
-        self.inner_nb.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        """设置分类表格页 + 文本报告页"""
+        BG = 'white'
+        BORDER = '#DDE3EA'
+        BLUE = '#1A6FD4'
+        PANEL_BG = '#F7F9FC'
 
-        # --- 分类表格 ---
-        self.tab_tree = tk.Frame(self.inner_nb)
-        self.inner_nb.add(self.tab_tree, text="分类表格")
-        t_bar = tk.Frame(self.tab_tree, bg="#ddd")
-        t_bar.pack(fill=tk.X, side=tk.TOP)
-        tk.Button(t_bar, text="➕ 新增  [Ins]", command=self.open_add_data_dialog, bg="#ccffcc").pack(side=tk.LEFT, padx=2,
-                                                                                              pady=2)
-        tk.Button(t_bar, text="❌ 删除  [Del]", command=self.delete_selected_data, bg="#ffcccc").pack(side=tk.LEFT, padx=2,
-                                                                                              pady=2)
-        tk.Label(t_bar, text="|").pack(side=tk.LEFT, padx=2)
-        tk.Button(t_bar, text="↑", command=self.move_item_up, width=3).pack(side=tk.LEFT, padx=2)
-        tk.Button(t_bar, text="↓", command=self.move_item_down, width=3).pack(side=tk.LEFT, padx=2)
-        self.undo_btn = tk.Button(t_bar, text="↶ 撤销", command=self.undo_classifier_action, state=tk.DISABLED)
-        self.undo_btn.pack(side=tk.LEFT, padx=2)
-        tk.Button(t_bar, text="📋 历史", command=self.show_history_panel, bg="#e8eaf6").pack(side=tk.LEFT, padx=2)
-        tk.Label(t_bar, text="|").pack(side=tk.LEFT, padx=2)
-        tk.Button(t_bar, text="拆分A组", command=self.apply_corrections, bg="#e3f2fd").pack(side=tk.LEFT, padx=2)
-        self.create_tooltip(t_bar.winfo_children()[-1], "拆分所有组值为A且文字数大于2的项目")
-        tk.Button(t_bar, text="⚙️ 空格/清理设置", command=self.show_space_settings, bg="#f3e5f5").pack(side=tk.LEFT, padx=2)
-        tk.Button(t_bar, text="🎨 字体样式", command=self.show_font_style_settings, bg="#e8f5e8").pack(side=tk.LEFT, padx=2)
-        
-        # 添加功能提示
-        tk.Label(t_bar, text="💡", fg="blue", bg="#ddd", font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
-        self.create_tooltip(t_bar.winfo_children()[-1], "分类目录树已改为表格视图\n右击数据行可对当前选择快速改组\n\nC组文字显示为深绿色")
-        
-        # 在工具栏右侧添加消息显示区域
-        self.message_area = tk.Frame(t_bar, bg="#ddd")
-        self.message_area.pack(side=tk.RIGHT, padx=10)
+        def flat_btn(parent, text, cmd, bg='white', fg='#374151', **kw):
+            b = tk.Button(parent, text=text, command=cmd, bg=bg, fg=fg,
+                          relief='flat', bd=0, cursor='hand2',
+                          font=('Microsoft YaHei', 9),
+                          highlightthickness=1, highlightbackground=BORDER,
+                          padx=8, pady=4, **kw)
+            return b
 
-        self.tree = ttk.Treeview(self.tab_tree, columns=('Label', 'Status', 'Group', 'Index', 'Category', 'CategoryKey'),
-                                 show='headings',
-                                 displaycolumns=('Category', 'Label', 'Status', 'Group'))
-        self.tree.heading('Category', text='分类');
-        self.tree.heading('Label', text='名称');
-        self.tree.heading('Status', text='C组')
-        self.tree.heading('Group', text='组')
-        self.tree.column('Index', width=0, stretch=False)
-        self.tree.column('CategoryKey', width=0, stretch=False)
-        self.tree.column('Category', width=220, minwidth=150, stretch=True)
-        
-        # 设置列宽度 - 确保红色文字能完全显示
-        self.tree.column('Label', width=400, minwidth=300, stretch=True)  # 名称列，增加到400宽度，可拉伸
-        self.tree.column('Status', width=80, minwidth=60, stretch=False)  # 标记列，固定宽度
-        self.tree.column('Group', width=60, minwidth=50, stretch=False)  # 组列，固定宽度
-        
-        # 添加垂直滚动条
-        tree_scrollbar = ttk.Scrollbar(self.tab_tree, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscrollcommand=tree_scrollbar.set)
-        
-        # 布局
+        # ════════════════════════════════
+        # 分类表格页 (self.tab_res)
+        # ════════════════════════════════
+        self.tab_res.configure(bg=BG)
+
+        # 工具栏
+        t_bar = tk.Frame(self.tab_res, bg=BG,
+                         highlightthickness=1, highlightbackground=BORDER)
+        t_bar.pack(fill=tk.X, padx=0, pady=0)
+
+        bar_inner = tk.Frame(t_bar, bg=BG)
+        bar_inner.pack(fill=tk.X, padx=10, pady=6)
+
+        for text, cmd, bg, fg in [
+            ('➕ 新增', self.open_add_data_dialog, '#EFF6FF', BLUE),
+            ('❌ 删除', self.delete_selected_data, '#FEF2F2', '#EF4444'),
+            ('↑', self.move_item_up, 'white', '#374151'),
+            ('↓', self.move_item_down, 'white', '#374151'),
+        ]:
+            flat_btn(bar_inner, text, cmd, bg=bg, fg=fg).pack(side=tk.LEFT, padx=(0, 4))
+
+        tk.Frame(bar_inner, bg=BORDER, width=1).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+
+        self.undo_btn = flat_btn(bar_inner, '↶ 撤销', self.undo_classifier_action,
+                                  state=tk.DISABLED)
+        self.undo_btn.pack(side=tk.LEFT, padx=(0, 4))
+        flat_btn(bar_inner, '📋 历史', self.show_history_panel).pack(side=tk.LEFT, padx=(0, 4))
+
+        tk.Frame(bar_inner, bg=BORDER, width=1).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+
+        flat_btn(bar_inner, '拆分A组', self.apply_corrections,
+                 bg='#EFF6FF', fg=BLUE).pack(side=tk.LEFT, padx=(0, 4))
+        flat_btn(bar_inner, '⚙ 空格/清理', self.show_space_settings).pack(side=tk.LEFT, padx=(0, 4))
+        flat_btn(bar_inner, '🎨 字体样式', self.show_font_style_settings).pack(side=tk.LEFT, padx=(0, 4))
+
+        # 消息区
+        self.message_area = tk.Frame(bar_inner, bg=BG)
+        self.message_area.pack(side=tk.RIGHT)
+
+        # 表格
+        tree_frame = tk.Frame(self.tab_res, bg=BG)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+
+        vsb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.tree = ttk.Treeview(
+            tree_frame,
+            columns=('Label', 'Status', 'Group', 'Index', 'Category', 'CategoryKey'),
+            show='headings',
+            displaycolumns=('Category', 'Label', 'Status', 'Group'),
+            yscrollcommand=vsb.set
+        )
+        vsb.config(command=self.tree.yview)
+
+        self.tree.heading('Category', text='分类')
+        self.tree.heading('Label',    text='名称')
+        self.tree.heading('Status',   text='C组')
+        self.tree.heading('Group',    text='组')
+        self.tree.column('Index',       width=0,   stretch=False)
+        self.tree.column('CategoryKey', width=0,   stretch=False)
+        self.tree.column('Category',    width=120, minwidth=80,  stretch=False)
+        self.tree.column('Label',       width=400, minwidth=200, stretch=True)
+        self.tree.column('Status',      width=60,  minwidth=50,  stretch=False)
+        self.tree.column('Group',       width=55,  minwidth=40,  stretch=False)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        tree_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self.tree.bind("<ButtonPress-1>", self.on_drag_start)
-        self.tree.bind("<B1-Motion>", self.on_drag_motion)
-        self.tree.bind("<ButtonRelease-1>", self.on_drag_release)
-        self.tree.bind("<ButtonPress-1>", self.on_long_press_start, add='+')
-        self.tree.bind("<ButtonRelease-1>", self.on_long_press_cancel, add='+')
-        self.tree.bind("<Button-3>", self.on_right_click)
-        self.tree.bind("<Double-1>", self.on_double_click)  # 添加双击事件
-        self.tree.bind("<space>", self.split_group_a_items)  # 空格键拆分所有A组
+        # 绑定事件
+        self.tree.bind('<ButtonPress-1>',   self.on_drag_start)
+        self.tree.bind('<B1-Motion>',       self.on_drag_motion)
+        self.tree.bind('<ButtonRelease-1>', self.on_drag_release)
+        self.tree.bind('<ButtonPress-1>',   self.on_long_press_start,  add='+')
+        self.tree.bind('<ButtonRelease-1>', self.on_long_press_cancel, add='+')
+        self.tree.bind('<Button-3>',        self.on_right_click)
+        self.tree.bind('<Double-1>',        self.on_double_click)
+        self.tree.bind('<space>',           self.split_group_a_items)
+        self.tree.bind('<Insert>',          lambda e: self.open_add_data_dialog())
+        self.tree.bind('<Delete>',          lambda e: self.delete_selected_data())
+        self.tree.bind('<Up>',              self._on_tree_up)
+        self.tree.bind('<Down>',            self._on_tree_down)
+        self.tree.bind('<Control-z>',       lambda e: self.undo_classifier_action())
+        self.tree.bind('<KeyPress-plus>',      lambda e: self.set_selected_group_by_shortcut('D'))
+        self.tree.bind('<KeyPress-KP_Add>',    lambda e: self.set_selected_group_by_shortcut('D'))
+        self.tree.bind('<KeyPress-minus>',     lambda e: self.set_selected_group_by_shortcut('C'))
+        self.tree.bind('<KeyPress-KP_Subtract>', lambda e: self.set_selected_group_by_shortcut('C'))
 
-        # 快捷键
-        self.tree.bind("<Insert>", lambda e: self.open_add_data_dialog())   # Insert 新增
-        self.tree.bind("<Delete>", lambda e: self.delete_selected_data())   # Delete 删除
-        self.tree.bind("<Up>", self._on_tree_up)                            # ↑ 上移
-        self.tree.bind("<Down>", self._on_tree_down)                        # ↓ 下移
-        self.tree.bind("<Control-z>", lambda e: self.undo_classifier_action())  # Ctrl+Z 撤销
-        self.tree.bind("<KeyPress-plus>", lambda e: self.set_selected_group_by_shortcut("D"))        # + 改为D组
-        self.tree.bind("<KeyPress-KP_Add>", lambda e: self.set_selected_group_by_shortcut("D"))      # 小键盘+ 改为D组
-        self.tree.bind("<KeyPress-minus>", lambda e: self.set_selected_group_by_shortcut("C"))       # - 改为C组
-        self.tree.bind("<KeyPress-KP_Subtract>", lambda e: self.set_selected_group_by_shortcut("C")) # 小键盘- 改为C组
+        # ════════════════════════════════
+        # 文本报告页 (self.tab_report_outer)
+        # ════════════════════════════════
+        self.tab_report = self.tab_report_outer
+        self.tab_report.configure(bg=BG)
 
-        # --- 报告页 ---
-        self.tab_report = tk.Frame(self.inner_nb)
-        self.inner_nb.add(self.tab_report, text="文本报告")
-        r_bar = tk.Frame(self.tab_report, bg="#ddd")
-        r_bar.pack(fill=tk.X, side=tk.TOP)
-        tk.Button(r_bar, text="💾 导出 TXT", command=self.export_txt_file, bg="#e1f5fe").pack(side=tk.LEFT, padx=5, pady=2)
-        tk.Button(r_bar, text="导出 Excel", command=self.export_excel_file, bg="#e8f5e9").pack(side=tk.LEFT, padx=2, pady=2)
-        tk.Button(r_bar, text="📜 导出历史", command=self.show_export_history, bg="#f3e5f5").pack(side=tk.LEFT, padx=2, pady=2)
-        # 添加工具提示
-        self.create_tooltip(r_bar.winfo_children()[-1], "查看和管理导出的TXT文件历史记录\n• 查看、复制或保存之前导出的内容\n• 一键导出所有记录（需要密码）\n• 清空所有记录（需要密码）")
-        tk.Button(r_bar, text="繁 -> 简", command=self.convert_to_simplified, bg="#fff0f5").pack(side=tk.LEFT, padx=2)
-        tk.Button(r_bar, text="简 -> 繁", command=self.convert_to_traditional, bg="#fff0f5").pack(side=tk.LEFT, padx=2)
-        tk.Button(r_bar, text="🔄 替换", command=self._run_replace_rules_report, bg="#fff3e0").pack(side=tk.LEFT, padx=2)
-        tk.Button(r_bar, text="⚙️ 替换设置", command=self.show_replace_settings, bg="#fff3e0").pack(side=tk.LEFT, padx=2)
+        r_bar = tk.Frame(self.tab_report, bg=BG,
+                         highlightthickness=1, highlightbackground=BORDER)
+        r_bar.pack(fill=tk.X)
+        r_inner = tk.Frame(r_bar, bg=BG)
+        r_inner.pack(fill=tk.X, padx=10, pady=6)
 
-        # 分隔方式切换按钮
-        self.separator_btn = tk.Button(r_bar, text="分隔: ----", bg="#e0f0ff",
-                                       command=self.toggle_report_separator)
-        self.separator_btn.pack(side=tk.LEFT, padx=2)
-        self.report_format_btn = tk.Button(r_bar, text="格式: 仅名称", bg="#e8eaf6",
-                                           command=self.toggle_report_format)
-        self.report_format_btn.pack(side=tk.LEFT, padx=2)
-        
-        # 添加空行规则说明
-        tk.Label(r_bar, text="💡", fg="blue", bg="#ddd", font=("Arial", 10)).pack(side=tk.RIGHT, padx=5)
-        self.create_tooltip(r_bar.winfo_children()[-1], "空行规则：\n1. 组值改变时添加空行\n2. 红色文字之间添加空行\n\n导出功能：\n• 导出TXT：保存当前报告\n• 导出历史：查看所有导出记录")
-        
-        # 使用ScrolledText提供更好的滚动条支持
-        self.report_text = scrolledtext.ScrolledText(self.tab_report, wrap=tk.WORD, 
-                                                   font=("Microsoft YaHei", 11))
-        self.report_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        # 加载报告格式和分隔方式设置
+        flat_btn(r_inner, '💾 导出 TXT',  self.export_txt_file,
+                 bg='#EFF6FF', fg=BLUE).pack(side=tk.LEFT, padx=(0, 4))
+        flat_btn(r_inner, '导出 Excel',   self.export_excel_file,
+                 bg='#F0FDF4', fg='#16A34A').pack(side=tk.LEFT, padx=(0, 4))
+        flat_btn(r_inner, '📜 导出历史',  self.show_export_history).pack(side=tk.LEFT, padx=(0, 4))
+
+        tk.Frame(r_inner, bg=BORDER, width=1).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+
+        flat_btn(r_inner, '繁→简', self.convert_to_simplified).pack(side=tk.LEFT, padx=(0, 4))
+        flat_btn(r_inner, '简→繁', self.convert_to_traditional).pack(side=tk.LEFT, padx=(0, 4))
+
+        tk.Frame(r_inner, bg=BORDER, width=1).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+
+        flat_btn(r_inner, '🔄 替换',   self._run_replace_rules_report).pack(side=tk.LEFT, padx=(0, 4))
+        flat_btn(r_inner, '⚙ 替换设置', self.show_replace_settings).pack(side=tk.LEFT, padx=(0, 4))
+
+        tk.Frame(r_inner, bg=BORDER, width=1).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+
+        self.separator_btn = flat_btn(r_inner, '分隔: ----', self.toggle_report_separator)
+        self.separator_btn.pack(side=tk.LEFT, padx=(0, 4))
+        self.report_format_btn = flat_btn(r_inner, '格式: 仅名称', self.toggle_report_format)
+        self.report_format_btn.pack(side=tk.LEFT, padx=(0, 4))
+
+        self.report_text = scrolledtext.ScrolledText(
+            self.tab_report, wrap=tk.WORD,
+            font=('Microsoft YaHei', 11),
+            relief='flat', bd=0,
+            bg='white'
+        )
+        self.report_text.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
         self.load_report_config()
+
 
     def setup_plot_tab(self):
         """定义绘图标签页内容"""
@@ -2584,11 +2984,9 @@ class OCRApp:
         try:
             if self.main_notebook.select() != str(self.classifier_tab):
                 return False
-            if self.classifier_notebook.select() != str(self.tab_res):
-                return False
-            if self.inner_nb.select() != str(self.tab_tree):
-                return False
-            return True
+            # 新版：判断当前步骤是否为分类表格
+            current_page = getattr(self, '_current_step', '分类表格')
+            return current_page == '分类表格'
         except Exception:
             return False
 
@@ -4324,7 +4722,7 @@ class OCRApp:
             self.parsed_snapshot['action_name'] = "粘贴解析后的状态"
 
             self.main_notebook.select(self.classifier_tab)
-            self.classifier_notebook.select(self.tab_plt)
+            self._step_switch('分类表格', 0)
 
     def convert_text(self, mode):
         """转换文本"""
@@ -6908,6 +7306,9 @@ class OCRApp:
             self.text_input.delete("1.0", tk.END)
             self.text_input.insert(tk.END, text_to_copy)
             self.load_from_text()
+
+            # 刷新右侧预览表格
+            self.root.after(300, self._refresh_ocr_preview)
 
             self.progress_label.config(
                 text=f"✓ 已复制并解析！{len(all_lines)}行 {len(text_to_copy)}字符")
