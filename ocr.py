@@ -1067,8 +1067,14 @@ class OCRApp:
                 typ  = item.get('type', '')
                 fc   = item.get('file_count', 0)
                 tl   = item.get('total_lines', 0)
-                if kw and kw not in f'{ts}{typ}'.lower():
-                    continue
+                if kw:
+                    # 搜索时间、类型、文件名、识别内容
+                    searchable = f'{ts}{typ}'
+                    for f in item.get('files', []):
+                        searchable += f.get('name', '')
+                        searchable += ' '.join(f.get('content', []))
+                    if kw not in searchable.lower():
+                        continue
                 htree.insert('', tk.END, iid=f'h_{i}',
                              values=(ts, typ, fc, tl))
 
@@ -1448,11 +1454,13 @@ class OCRApp:
 
         # 4. 绘图模式切换
         sec4 = section(left_panel, '4. 绘图模式')
-        for text, val in [('🖱 直线模式', False), ('🎯 圈选模式', True)]:
+        for text, val in [('🖱 直线模式（左键加线/右键删线）', False),
+                           ('🎯 圈选模式（画圈提取数据）', True)]:
             tk.Radiobutton(sec4, text=text,
                            variable=self.enable_lasso_mode, value=val,
                            command=self.update_plot_view,
-                           bg=PANEL_BG, font=('Microsoft YaHei', 9)).pack(
+                           bg=PANEL_BG, font=('Microsoft YaHei', 9),
+                           wraplength=190, justify='left').pack(
                                anchor='w', pady=2)
 
         tk.Frame(left_panel, bg=BORDER, height=1).pack(fill=tk.X, padx=14, pady=14)
@@ -1476,23 +1484,6 @@ class OCRApp:
         self.add_zeros_btn = aux_row.winfo_children()[0]
         self.export_btn    = aux_row.winfo_children()[1]
         self.clear_btn     = aux_row.winfo_children()[2]
-
-        # 绘图模式（步骤2时显示）
-        self._left_plot_section = tk.Frame(left_panel, bg=PANEL_BG)
-        tk.Label(self._left_plot_section, text='绘图模式切换',
-                 bg=PANEL_BG, fg='#374151',
-                 font=('Microsoft YaHei', 9, 'bold')).pack(
-                     anchor='w', padx=14, pady=(16, 6))
-        for text, val in [('🖱 直线模式（左键加线/右键删线）', False),
-                           ('🎯 圈选模式（画圈提取数据）', True)]:
-            tk.Radiobutton(self._left_plot_section, text=text,
-                           variable=self.enable_lasso_mode, value=val,
-                           command=self.update_plot_view,
-                           bg=PANEL_BG, font=('Microsoft YaHei', 9),
-                           wraplength=190, justify='left').pack(
-                               anchor='w', padx=16, pady=4)
-
-        self._left_ocr_widgets = [sec1, self.progress_frame, sec2, sec3]
 
         # text_input 隐藏控件，load_from_text 需要它做数据中转
         self.text_input = tk.Text(left_panel, height=1, font=('Consolas', 10))
@@ -1587,49 +1578,6 @@ class OCRApp:
         threading.Thread(target=_thread_wrapper, daemon=True).start()
 
 
-        """构建步骤1识别结果预览页"""
-        page = self._page_ocr
-        top_bar = tk.Frame(page, bg=BG)
-        top_bar.pack(fill=tk.X, padx=16, pady=(14, 6))
-        self._ocr_preview_title = tk.Label(top_bar, text='识别结果预览',
-                                           bg=BG, fg='#111827',
-                                           font=('Microsoft YaHei', 12, 'bold'))
-        self._ocr_preview_title.pack(side=tk.LEFT)
-
-        self.result_text = scrolledtext.ScrolledText(page, width=1, height=1,
-                                                     font=('Microsoft YaHei', 10))
-        self.result_text.pack_forget()
-        self.context_menu = tk.Menu(self.result_text, tearoff=0)
-        self.context_menu.add_command(label='复制选中内容', command=self.copy_selected)
-        self.context_menu.add_command(label='复制全部（文字+位置）', command=self.copy_all_text)
-        self.context_menu.add_separator()
-        self.context_menu.add_command(label='全选', command=self.select_all)
-        self.result_text.bind('<Button-3>', self.show_context_menu)
-
-        tbl_frame = tk.Frame(page, bg=BG)
-        tbl_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 12))
-        vsb = ttk.Scrollbar(tbl_frame, orient=tk.VERTICAL)
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        self._preview_tree = ttk.Treeview(
-            tbl_frame,
-            columns=('cat', 'label', 'c_group', 'group'),
-            show='headings', yscrollcommand=vsb.set)
-        vsb.config(command=self._preview_tree.yview)
-        self._preview_tree.heading('cat',     text='分类')
-        self._preview_tree.heading('label',   text='名称')
-        self._preview_tree.heading('c_group', text='C组')
-        self._preview_tree.heading('group',   text='组')
-        self._preview_tree.column('cat',     width=80,  anchor='center')
-        self._preview_tree.column('label',   width=320, anchor='w')
-        self._preview_tree.column('c_group', width=60,  anchor='center')
-        self._preview_tree.column('group',   width=60,  anchor='center')
-        self._preview_tree.pack(fill=tk.BOTH, expand=True)
-        bottom = tk.Frame(page, bg=BG)
-        bottom.pack(fill=tk.X, padx=16, pady=(0, 8))
-        self._preview_count_lbl = tk.Label(bottom, text='', bg=BG, fg='#6B7280',
-                                           font=('Microsoft YaHei', 9))
-        self._preview_count_lbl.pack(side=tk.LEFT)
-
     def _step_switch(self, name, index):
         """切换步骤标签页"""
         BLUE = '#1A6FD4'
@@ -1653,23 +1601,38 @@ class OCRApp:
         if name == '交互绘图' and not self.plot_initialized:
             self.setup_plot_tab()
 
+        # 切换到分类表格后，强制 Treeview 重算内部布局（避免 pack_forget→pack 后的渲染残留）
+        if name == '分类表格' and hasattr(self, 'tree'):
+            self.root.after(10, self._tree_ensure_layout)
+
+    def _tree_ensure_layout(self):
+        """强制 Treeview 刷新内部几何，消除 pack_forget→pack 后的渲染残留"""
+        try:
+            if not self.tree.winfo_exists():
+                return
+            self.tree.update_idletasks()
+            # 修改 height 属性触发 ttk 内部完整几何重算
+            self.tree.configure(height=self.tree['height'])
+        except Exception:
+            pass
+
     def setup_left_panel(self):
         """左侧面板 — 内容随步骤动态切换"""
         PANEL_BG = '#F7F9FC'
         BORDER = '#DDE3EA'
         BLUE = '#1A6FD4'
-        self.left_panel.configure(bg=PANEL_BG)
+        self._ocr_left.configure(bg=PANEL_BG)
 
         # text_input 保留但隐藏（load_from_text 需要它）
-        self.text_input = tk.Text(self.left_panel, height=1,
+        self.text_input = tk.Text(self._ocr_left, height=1,
                                   font=('Consolas', 10))
         # 不 pack，仅作数据中转用
 
         # ── ① 分类表格页面板（空，顶部已有重置和字号）──
-        self._panel_tree = tk.Frame(self.left_panel, bg=PANEL_BG)
+        self._panel_tree = tk.Frame(self._ocr_left, bg=PANEL_BG)
 
         # ── ② 交互绘图页面板 ──
-        self._panel_plot = tk.Frame(self.left_panel, bg=PANEL_BG)
+        self._panel_plot = tk.Frame(self._ocr_left, bg=PANEL_BG)
 
         def sec(parent, title):
             tk.Label(parent, text=title, bg=PANEL_BG, fg='#374151',
@@ -1689,7 +1652,7 @@ class OCRApp:
                                anchor='w', padx=16, pady=4)
 
         # ③ 文本报告页无面板（_panel_report 为空占位）
-        self._panel_report = tk.Frame(self.left_panel, bg=PANEL_BG)
+        self._panel_report = tk.Frame(self._ocr_left, bg=PANEL_BG)
 
         self._left_panels = {
             '分类表格': self._panel_tree,
@@ -3423,14 +3386,10 @@ class OCRApp:
     def apply_font_style(self):
         """应用字体样式"""
         s = self.current_font_size
-        # 更新全局Treeview样式 (内容和标题) - 增加行高确保文字完全显示
-        ttk.Style().configure("Treeview", font=("Microsoft YaHei", s), rowheight=int(s * 3.0))
-        ttk.Style().configure("Treeview.Heading", font=("Microsoft YaHei", s, "bold"))
-        # 列分隔线效果
-        ttk.Style().configure("Treeview", relief="flat")
-        ttk.Style().layout("Treeview", [
-            ('Treeview.treearea', {'sticky': 'nswe'})
-        ])
+        # 更新 Treeview 样式 — 只改字体和行高，不动内部布局
+        style = ttk.Style()
+        style.configure("Treeview", font=("Microsoft YaHei", s), rowheight=int(s * 3.0))
+        style.configure("Treeview.Heading", font=("Microsoft YaHei", s, "bold"))
 
         # 更新特定标签样式 - 标记状态只改变背景色，不改变字体和颜色
         self.tree.tag_configure('marked', background='#FFFACD')  # 浅黄色背景表示标记状态
@@ -4539,24 +4498,11 @@ class OCRApp:
     def refresh_all(self):
         """刷新所有（含 matplotlib 图表重绘，适合数据结构变化时调用）"""
         try:
-            # 显示处理提示
-            if hasattr(self, 'progress_label'):
-                self.progress_label.config(text="正在刷新显示...")
-                self.root.update_idletasks()
-            
             if self.plot_initialized:
                 self.update_plot_view()
             self.classify_and_display()
-            
-            # 清除处理提示
-            if hasattr(self, 'progress_label'):
-                self.progress_label.config(text="")
-                
         except Exception as e:
             print(f"刷新显示时出错: {e}")
-            # 清除处理提示
-            if hasattr(self, 'progress_label'):
-                self.progress_label.config(text="")
 
     def merge_selected_items(self):
         """合并选中的两行为一行，文字用空格连接，组值取第一行"""
@@ -7967,8 +7913,7 @@ class OCRApp:
             
             self.root.clipboard_clear()
             self.root.clipboard_append(text_to_copy)
-            self.root.update()
-            
+
             line_count = len(all_lines)
             char_count = len(text_to_copy)
             
@@ -7999,14 +7944,10 @@ class OCRApp:
             text_to_copy = "\n".join(all_lines)
             self.root.clipboard_clear()
             self.root.clipboard_append(text_to_copy)
-            self.root.update()
 
             self.text_input.delete("1.0", tk.END)
             self.text_input.insert(tk.END, text_to_copy)
             self.load_from_text()
-
-            # 刷新右侧预览表格
-            self.root.after(300, self._refresh_ocr_preview)
 
             self.progress_label.config(
                 text=f"✓ 已复制并解析！{len(all_lines)}行 {len(text_to_copy)}字符")
