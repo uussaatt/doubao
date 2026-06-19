@@ -1350,6 +1350,8 @@ class OCRApp:
 
         self._update_ocr_btn_by_keys()
         self._step_switch('交互绘图', 0)
+        # 初始化时应用一次字体样式，确保行高正确
+        self.root.after(100, self.apply_font_style)
 
     def _build_left_ocr_panel(self, PANEL_BG, BORDER, BLUE):
         """构建左侧操作面板"""
@@ -3388,7 +3390,7 @@ class OCRApp:
         s = self.current_font_size
         # 更新 Treeview 样式 — 只改字体和行高，不动内部布局
         style = ttk.Style()
-        style.configure("Treeview", font=("Microsoft YaHei", s), rowheight=int(s * 3.0))
+        style.configure("Treeview", font=("Microsoft YaHei", s), rowheight=max(int(s * 2.2), s + 10))
         style.configure("Treeview.Heading", font=("Microsoft YaHei", s, "bold"))
 
         # 更新特定标签样式 - 标记状态只改变背景色，不改变字体和颜色
@@ -9971,7 +9973,7 @@ class OCRApp:
         
         # 配置表格样式
         style = ttk.Style()
-        style.configure("Treeview", font=("Microsoft YaHei", 10), rowheight=25)
+        style.configure("Treeview", font=("Microsoft YaHei", self.current_font_size), rowheight=max(int(self.current_font_size * 2.2), self.current_font_size + 10))
         style.configure("Treeview.Heading", font=("Microsoft YaHei", 11, "bold"))
 
         control_frame = tk.Frame(parent)
@@ -10177,7 +10179,7 @@ class OCRApp:
         
         # 配置表格样式
         style = ttk.Style()
-        style.configure("Treeview", font=("Microsoft YaHei", 10), rowheight=25)
+        style.configure("Treeview", font=("Microsoft YaHei", self.current_font_size), rowheight=max(int(self.current_font_size * 2.2), self.current_font_size + 10))
         style.configure("Treeview.Heading", font=("Microsoft YaHei", 11, "bold"))
         
         # 插入数据
