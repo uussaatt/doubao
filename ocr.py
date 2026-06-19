@@ -850,7 +850,7 @@ class OCRApp:
         tree.tag_configure('basic',    background='#FFF3E0')
         tree.tag_configure('general',  background='#F3E5F5')
         tree.tag_configure('total',    background='#E8F5E9',
-                           font=('Microsoft YaHei', 9, 'bold'))
+                           font=('Microsoft YaHei', self.current_font_size, 'bold'))
 
         def _fill():
             tree.delete(*tree.get_children())
@@ -925,7 +925,7 @@ class OCRApp:
         tree.tag_configure('basic',    background='#FFF3E0')
         tree.tag_configure('general',  background='#F3E5F5')
         tree.tag_configure('total',    background='#E8F5E9',
-                           font=('Microsoft YaHei', 9, 'bold'))
+                           font=('Microsoft YaHei', self.current_font_size, 'bold'))
 
         monthly = {}
         for date, day_data in self.stats.items():
@@ -1281,10 +1281,9 @@ class OCRApp:
 
         self._step_btns = {}
         steps = [
-            ('导入/OCR识别', '导入图片并识别文字'),
-            ('交互绘图',     '标注识别区域'),
-            ('分类表格',     '生成结构化数据'),
-            ('文本报告',     '生成识别报告'),
+            ('交互绘图', '识别并标注区域'),
+            ('分类表格', '生成结构化数据'),
+            ('文本报告', '生成识别报告'),
         ]
 
         for i, (name, sub) in enumerate(steps):
@@ -1314,27 +1313,37 @@ class OCRApp:
         self._right_content = tk.Frame(main_right, bg=BG)
         self._right_content.pack(fill=tk.BOTH, expand=True)
 
-        self._page_ocr        = tk.Frame(self._right_content, bg=BG)
         self.tab_plt          = tk.Frame(self._right_content, bg=BG)
         self.tab_res          = tk.Frame(self._right_content, bg=BG)
         self.tab_report_outer = tk.Frame(self._right_content, bg=BG)
+        self._page_ocr        = self.tab_plt  # 兼容旧代码
 
         self._classifier_pages = {
-            '导入/OCR识别': self._page_ocr,
-            '交互绘图':     self.tab_plt,
-            '分类表格':     self.tab_res,
-            '文本报告':     self.tab_report_outer,
+            '交互绘图': self.tab_plt,
+            '分类表格': self.tab_res,
+            '文本报告': self.tab_report_outer,
         }
 
         self._build_left_ocr_panel(PANEL_BG, BORDER, BLUE)
-        self._build_ocr_preview_page(BG, BORDER)
         self.setup_plot_placeholder()
         self.setup_results_tab()
         self._setup_drag_drop()
         self.image_paths = []
         self.all_results = []
+
+        # result_text 隐藏占位
+        self.result_text = scrolledtext.ScrolledText(
+            self.ocr_tab, width=1, height=1, font=('Microsoft YaHei', 10))
+        self.result_text.pack_forget()
+        self.context_menu = tk.Menu(self.result_text, tearoff=0)
+        self.context_menu.add_command(label='复制选中内容', command=self.copy_selected)
+        self.context_menu.add_command(label='复制全部（文字+位置）', command=self.copy_all_text)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label='全选', command=self.select_all)
+        self.result_text.bind('<Button-3>', self.show_context_menu)
+
         self._update_ocr_btn_by_keys()
-        self._step_switch('导入/OCR识别', 0)
+        self._step_switch('交互绘图', 0)
 
     def _build_left_ocr_panel(self, PANEL_BG, BORDER, BLUE):
         """构建左侧操作面板"""
@@ -1437,6 +1446,15 @@ class OCRApp:
         self.screenshot_btn = proc_row.winfo_children()[1]
         self.crop_merge_btn = proc_row.winfo_children()[2]
 
+        # 4. 绘图模式切换
+        sec4 = section(left_panel, '4. 绘图模式')
+        for text, val in [('🖱 直线模式', False), ('🎯 圈选模式', True)]:
+            tk.Radiobutton(sec4, text=text,
+                           variable=self.enable_lasso_mode, value=val,
+                           command=self.update_plot_view,
+                           bg=PANEL_BG, font=('Microsoft YaHei', 9)).pack(
+                               anchor='w', pady=2)
+
         tk.Frame(left_panel, bg=BORDER, height=1).pack(fill=tk.X, padx=14, pady=14)
         self.copy_btn = tk.Button(left_panel, text='▶  开始识别',
                                   command=self._start_ocr_and_parse,
@@ -1534,7 +1552,7 @@ class OCRApp:
         # 识别完成的回调：解析并跳到交互绘图
         def _after_ocr():
             self.copy_and_parse_text()
-            self.root.after(400, lambda: self._step_switch('交互绘图', 1))
+            self.root.after(400, lambda: self._step_switch('分类表格', 1))
 
         # 根据选中模式启动识别线程，识别结束时调用回调
         if mode == 'accurate':
@@ -1613,7 +1631,7 @@ class OCRApp:
         self._preview_count_lbl.pack(side=tk.LEFT)
 
     def _step_switch(self, name, index):
-        """切换步骤标签页，同时切换左侧面板"""
+        """切换步骤标签页"""
         BLUE = '#1A6FD4'
         BG = 'white'
         self._current_step = name
@@ -1631,23 +1649,9 @@ class OCRApp:
             frame.pack_forget()
         self._classifier_pages[name].pack(fill=tk.BOTH, expand=True)
 
-        # 切换左侧面板
-        self._left_plot_section.pack_forget()
-        for w in self._left_ocr_widgets:
-            w.pack_forget()
-        self.copy_btn.pack_forget()
-        if hasattr(self, 'add_zeros_btn'):
-            self.add_zeros_btn.master.pack_forget()
-
-        if name == '导入/OCR识别':
-            for w in self._left_ocr_widgets:
-                w.pack(fill=tk.X, padx=14, pady=(12, 0))
-            self.copy_btn.pack(fill=tk.X, padx=14, pady=(6, 4))
-            self.add_zeros_btn.master.pack(fill=tk.X, padx=14)
-        elif name == '交互绘图':
-            self._left_plot_section.pack(fill=tk.X)
-            if not self.plot_initialized:
-                self.setup_plot_tab()
+        # 交互绘图懒加载
+        if name == '交互绘图' and not self.plot_initialized:
+            self.setup_plot_tab()
 
     def setup_left_panel(self):
         """左侧面板 — 内容随步骤动态切换"""
@@ -1669,7 +1673,7 @@ class OCRApp:
 
         def sec(parent, title):
             tk.Label(parent, text=title, bg=PANEL_BG, fg='#374151',
-                     font=('Microsoft YaHei', 9, 'bold')).pack(
+                     font=('Microsoft YaHei', self.current_font_size, 'bold')).pack(
                          anchor='w', padx=16, pady=(16, 6))
 
         sec(self._panel_plot, '绘图模式切换')
@@ -2442,7 +2446,7 @@ class OCRApp:
         form.pack(fill=tk.X, padx=16, pady=(10, 0))
 
         tk.Label(form, text="名称", bg="#F8FAFC", fg="#374151",
-                 font=("Microsoft YaHei", 10, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 6))
+                 font=("Microsoft YaHei", self.current_font_size, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 6))
         n_ent = tk.Entry(form, font=("Microsoft YaHei", 11), bg="white",
                          relief="flat", bd=0, highlightthickness=2,
                          highlightbackground="#D1D5DB", highlightcolor="#22C55E")
@@ -2450,7 +2454,7 @@ class OCRApp:
         n_ent.focus_set()
 
         tk.Label(form, text="组", bg="#F8FAFC", fg="#374151",
-                 font=("Microsoft YaHei", 10, "bold")).grid(row=1, column=0, sticky="w", pady=(6, 0))
+                 font=("Microsoft YaHei", self.current_font_size, "bold")).grid(row=1, column=0, sticky="w", pady=(6, 0))
 
         # A/B/C 三个切换按钮
         grp_frame = tk.Frame(form, bg="#F8FAFC")
@@ -5086,7 +5090,7 @@ class OCRApp:
         space_title = tk.Frame(space_card, bg=colors["card"])
         space_title.grid(row=0, column=0, sticky="ew")
         tk.Label(space_title, text="▣  空格规则", bg=colors["card"], fg=colors["blue"],
-                 font=("Microsoft YaHei", 10, "bold")).pack(side=tk.LEFT)
+                 font=("Microsoft YaHei", self.current_font_size, "bold")).pack(side=tk.LEFT)
         help_btn = make_button(space_title, "? 帮助", lambda: messagebox.showinfo(
             "空格规则帮助",
             "每行输入一个两个字的词，保存后会在两个字之间自动加空格。\n例如：一时 会处理成 一 时",
@@ -5135,7 +5139,7 @@ class OCRApp:
         filter_title = tk.Frame(filter_card, bg=colors["card"])
         filter_title.grid(row=0, column=0, sticky="ew")
         tk.Label(filter_title, text="🗑  清理规则", bg=colors["card"], fg=colors["green"],
-                 font=("Microsoft YaHei", 10, "bold")).pack(side=tk.LEFT)
+                 font=("Microsoft YaHei", self.current_font_size, "bold")).pack(side=tk.LEFT)
         filter_help_btn = make_button(filter_title, "? 帮助", lambda: messagebox.showinfo(
             "清理规则帮助",
             "匹配到列表里的文字或符号时，会从名称中删除。\n支持普通文字或正则表达式。",
@@ -5251,7 +5255,7 @@ class OCRApp:
         usage_text = tk.Frame(usage, bg="#EAF2FF")
         usage_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
         tk.Label(usage_text, text="使用说明", bg="#EAF2FF", fg=colors["text"],
-                 font=("Microsoft YaHei", 10, "bold")).pack(anchor=tk.W)
+                 font=("Microsoft YaHei", self.current_font_size, "bold")).pack(anchor=tk.W)
         tk.Label(usage_text, text="• 空格规则：将每组两个字之间自动插入空格（如“一时” → “一 时”）",
                  bg="#EAF2FF", fg="#334155", font=("Microsoft YaHei", 8)).pack(anchor=tk.W, pady=(4, 0))
         tk.Label(usage_text, text="• 清理规则：匹配到列表中的内容时，将从名称中删除",
@@ -5416,7 +5420,7 @@ class OCRApp:
             self.parsed_snapshot = self._create_classifier_snapshot()
             self.parsed_snapshot['action_name'] = "粘贴解析后的状态"
 
-            self._step_switch('分类表格', 0)
+            self._step_switch('交互绘图', 0)
 
     def convert_text(self, mode):
         """转换文本"""
@@ -6626,7 +6630,7 @@ class OCRApp:
 
         tk.Button(button_frame, text=recommend_text, command=lambda: close_and_run(recommend_action),
                   bg="#1976D2", fg="white", padx=24, pady=9,
-                  font=("Microsoft YaHei", 10, "bold")).pack(side=tk.LEFT, padx=6)
+                  font=("Microsoft YaHei", self.current_font_size, "bold")).pack(side=tk.LEFT, padx=6)
 
         if count == 2 and recommend_action != "merge":
             tk.Button(button_frame, text="拼接图片", command=lambda: close_and_run("merge"),
@@ -10158,7 +10162,7 @@ class OCRApp:
         tree.tag_configure("accurate", background="#E3F2FD")
         tree.tag_configure("basic", background="#FFF3E0")
         tree.tag_configure("general", background="#F3E5F5")
-        tree.tag_configure("total", background="#E8F5E9", font=("Microsoft YaHei", 10, "bold"))
+        tree.tag_configure("total", background="#E8F5E9", font=("Microsoft YaHei", self.current_font_size, "bold"))
     
     def _show_monthly_stats(self, parent):
         """显示按月统计"""
@@ -10289,7 +10293,7 @@ class OCRApp:
         tree.tag_configure("accurate", background="#E3F2FD")
         tree.tag_configure("basic", background="#FFF3E0")
         tree.tag_configure("general", background="#F3E5F5")
-        tree.tag_configure("total", background="#E8F5E9", font=("Microsoft YaHei", 10, "bold"))
+        tree.tag_configure("total", background="#E8F5E9", font=("Microsoft YaHei", self.current_font_size, "bold"))
     
     def export_results(self):
         """导出识别结果"""
