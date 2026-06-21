@@ -394,6 +394,8 @@ class OCRApp:
         # 历史记录
         self.history_limit = self.store.get('history_limit', 100)
         self.history_data = self.store.get('history', [])
+        self._pending_history_book_page = None
+        self._suppress_book_page_trace = False
         
         # 尺寸限制解锁状态
         self.size_limit_unlocked = False
@@ -476,50 +478,46 @@ class OCRApp:
         self.root.configure(bg='#F0F4F8')
 
         # ── 顶部标题栏 ──
-        title_bar = tk.Frame(self.root, bg='#1A6FD4', height=48)
+        title_bar = tk.Frame(self.root, bg='white', height=48,
+                             highlightthickness=1, highlightbackground='#E5E7EB')
         title_bar.pack(fill=tk.X, side=tk.TOP)
         title_bar.pack_propagate(False)
 
         # logo + 标题
-        logo_lbl = tk.Label(title_bar, text='⊙', bg='#1A6FD4', fg='white',
-                            font=('Microsoft YaHei', 20, 'bold'))
-        logo_lbl.pack(side=tk.LEFT, padx=(14, 6), pady=6)
-        tk.Label(title_bar, text='OCR 数据分类工具', bg='#1A6FD4', fg='white',
-                 font=('Microsoft YaHei', 13, 'bold')).pack(side=tk.LEFT, pady=6)
+        tk.Label(title_bar, text='C', bg='#1A6FD4', fg='white',
+                 font=('Microsoft YaHei', 13, 'bold'),
+                 padx=8, pady=4).pack(side=tk.LEFT, padx=(10, 6), pady=10)
+        tk.Label(title_bar, text='OCR 数据分类工具', bg='white', fg='#111827',
+                 font=('Microsoft YaHei', 12, 'bold')).pack(side=tk.LEFT, pady=6)
 
-        # 右侧按钮
-        for icon, tip, cmd in [
-            ('⚙', '设置', self.show_api_key_settings),
-            ('?', '帮助', lambda: messagebox.showinfo('帮助', '使用左侧导航切换功能页面')),
-        ]:
-            btn = tk.Label(title_bar, text=icon, bg='#1A6FD4', fg='white',
-                           font=('Microsoft YaHei', 13), cursor='hand2', padx=12)
-            btn.pack(side=tk.RIGHT, pady=6)
-            btn.bind('<Button-1>', lambda e, c=cmd: c())
-            btn.bind('<Enter>', lambda e, b=btn: b.config(bg='#1559B0'))
-            btn.bind('<Leave>', lambda e, b=btn: b.config(bg='#1A6FD4'))
+        # 右侧按钮区
+        def _title_btn(parent, text, cmd, fg='#374151'):
+            b = tk.Label(parent, text=text, bg='white', fg=fg,
+                         font=('Microsoft YaHei', 9), cursor='hand2', padx=10)
+            b.pack(side=tk.RIGHT, pady=10)
+            b.bind('<Button-1>', lambda e: cmd())
+            b.bind('<Enter>', lambda e: b.config(fg='#1A6FD4'))
+            b.bind('<Leave>', lambda e: b.config(fg=fg))
+            return b
 
-        # 数据导入按钮（替换原设置按钮位置）
-        import_btn = tk.Label(title_bar, text='📋 导入数据', bg='#1A6FD4', fg='white',
-                              font=('Microsoft YaHei', 10), cursor='hand2', padx=14)
-        import_btn.pack(side=tk.RIGHT, pady=6)
-        import_btn.bind('<Button-1>', lambda e: self._show_import_dialog())
-        import_btn.bind('<Enter>', lambda e: import_btn.config(bg='#1559B0'))
-        import_btn.bind('<Leave>', lambda e: import_btn.config(bg='#1A6FD4'))
+        _title_btn(self.root.nametowidget(title_bar) if False else title_bar,
+                   '?  帮助', lambda: messagebox.showinfo('帮助', '使用左侧导航切换功能页面'))
+        _title_btn(title_bar, '⚙  设置', self.show_api_key_settings)
+        _title_btn(title_bar, '☆  主题', lambda: None)
 
-        # 全局重置按钮
-        reset_btn = tk.Label(title_bar, text='↩ 重置', bg='#1A6FD4', fg='white',
-                             font=('Microsoft YaHei', 10), cursor='hand2', padx=14)
-        reset_btn.pack(side=tk.RIGHT, pady=6)
-        reset_btn.bind('<Button-1>', lambda e: self.clear_all_data())
-        reset_btn.bind('<Enter>', lambda e: reset_btn.config(bg='#1559B0'))
-        reset_btn.bind('<Leave>', lambda e: reset_btn.config(bg='#1A6FD4'))
+        # 分隔线
+        tk.Frame(title_bar, bg='#E5E7EB', width=1).pack(side=tk.RIGHT, fill=tk.Y, pady=8, padx=4)
+
+        _title_btn(title_bar, '📋  导入数据', self._show_import_dialog, fg='#1A6FD4')
+        _title_btn(title_bar, '↺  重置', self.clear_all_data)
+
+        tk.Frame(title_bar, bg='#E5E7EB', width=1).pack(side=tk.RIGHT, fill=tk.Y, pady=8, padx=4)
 
         # 字号选择
-        font_frame = tk.Frame(title_bar, bg='#1A6FD4')
-        font_frame.pack(side=tk.RIGHT, padx=(0, 4), pady=6)
-        tk.Label(font_frame, text='字号', bg='#1A6FD4', fg='white',
-                 font=('Microsoft YaHei', 9)).pack(side=tk.LEFT, padx=(8, 4))
+        font_frame = tk.Frame(title_bar, bg='white')
+        font_frame.pack(side=tk.RIGHT, padx=4, pady=8)
+        tk.Label(font_frame, text='字号', bg='white', fg='#374151',
+                 font=('Microsoft YaHei', 9)).pack(side=tk.LEFT, padx=(0, 4))
         self.combo_font = ttk.Combobox(font_frame, values=[str(i) for i in range(8, 31)],
                                        width=4, state='readonly',
                                        font=('Microsoft YaHei', 9))
@@ -528,12 +526,13 @@ class OCRApp:
         self.combo_font.bind('<<ComboboxSelected>>', self.on_font_combo_change)
 
         # ── 主体：左侧导航 + 右侧内容 ──
-        body = tk.Frame(self.root, bg='#F0F4F8')
+        body = tk.Frame(self.root, bg='#F7F9FC')
         body.pack(fill=tk.BOTH, expand=True)
 
         # ── 左侧导航栏 ──
-        nav_bg = '#1E2A3A'
-        nav = tk.Frame(body, bg=nav_bg, width=130)
+        nav_bg = '#FFFFFF'
+        nav = tk.Frame(body, bg=nav_bg, width=130,
+                       highlightthickness=1, highlightbackground='#E5E7EB')
         nav.pack(side=tk.LEFT, fill=tk.Y)
         nav.pack_propagate(False)
 
@@ -571,36 +570,45 @@ class OCRApp:
             ('🔓', '解锁',    lambda: self._nav_to('解锁')),
         ]
 
-        tk.Frame(nav, bg=nav_bg, height=16).pack()  # 顶部间距
+        tk.Frame(nav, bg=nav_bg, height=8).pack()  # 顶部间距
 
         for icon, label, cmd in nav_items:
             item = tk.Frame(nav, bg=nav_bg, cursor='hand2')
-            item.pack(fill=tk.X, pady=1)
+            item.pack(fill=tk.X, pady=2)
 
-            icon_lbl = tk.Label(item, text=icon, bg=nav_bg, fg='#A8C4E0',
-                                font=('Microsoft YaHei', 14), width=3)
-            icon_lbl.pack(side=tk.LEFT, padx=(10, 2), pady=10)
-            text_lbl = tk.Label(item, text=label, bg=nav_bg, fg='#C8D8E8',
-                                font=('Microsoft YaHei', 9), anchor='w')
-            text_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            # 左侧激活条
+            bar = tk.Frame(item, bg=nav_bg, width=3)
+            bar.pack(side=tk.LEFT, fill=tk.Y)
 
-            # 左侧高亮条
-            bar = tk.Frame(item, bg=nav_bg, width=4)
-            bar.pack(side=tk.LEFT)
+            # 图标+文字垂直排列
+            content = tk.Frame(item, bg=nav_bg)
+            content.pack(fill=tk.X, expand=True, padx=4, pady=6)
 
-            def _on_enter(e, f=item, il=icon_lbl, tl=text_lbl):
-                f.config(bg='#243447'); il.config(bg='#243447'); tl.config(bg='#243447')
+            icon_lbl = tk.Label(content, text=icon, bg=nav_bg, fg='#9CA3AF',
+                                font=('Microsoft YaHei', 16))
+            icon_lbl.pack()
+            text_lbl = tk.Label(content, text=label, bg=nav_bg, fg='#9CA3AF',
+                                font=('Microsoft YaHei', 8))
+            text_lbl.pack()
 
-            def _on_leave(e, f=item, il=icon_lbl, tl=text_lbl, b=bar, lbl=label):
+            def _on_enter(e, f=item, c=content, il=icon_lbl, tl=text_lbl):
                 active = getattr(self, '_active_nav', '')
-                bg = '#1A6FD4' if active == lbl else nav_bg
-                f.config(bg=bg); il.config(bg=bg); tl.config(bg=bg)
+                lbl = tl.cget('text')
+                if active != lbl:
+                    for w in (f, c, il, tl):
+                        w.config(bg='#F3F4F6')
+
+            def _on_leave(e, f=item, c=content, il=icon_lbl, tl=text_lbl, b=bar, lbl=label):
+                active = getattr(self, '_active_nav', '')
+                bg = '#EFF6FF' if active == lbl else nav_bg
+                for w in (f, c, il, tl):
+                    w.config(bg=bg)
 
             def _on_click(e, c=cmd, lbl=label):
                 self._set_active_nav(lbl)
                 c()
 
-            for w in (item, icon_lbl, text_lbl):
+            for w in (item, content, icon_lbl, text_lbl):
                 w.bind('<Enter>', _on_enter)
                 w.bind('<Leave>', _on_leave)
                 w.bind('<Button-1>', _on_click)
@@ -608,12 +616,13 @@ class OCRApp:
             self._nav_buttons[label] = (item, icon_lbl, text_lbl, bar)
 
         # 底部状态栏
-        status_bar = tk.Frame(nav, bg=nav_bg)
-        status_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=8)
-        self._status_dot = tk.Label(status_bar, text='●', bg=nav_bg, fg='#4CAF50',
-                                    font=('Arial', 10))
-        self._status_dot.pack(side=tk.LEFT, padx=(14, 4))
-        tk.Label(status_bar, text='就绪', bg=nav_bg, fg='#7A9AB8',
+        status_bar = tk.Frame(nav, bg=nav_bg,
+                              highlightthickness=1, highlightbackground='#E5E7EB')
+        status_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=0)
+        self._status_dot = tk.Label(status_bar, text='●', bg=nav_bg, fg='#22C55E',
+                                    font=('Arial', 9))
+        self._status_dot.pack(side=tk.LEFT, padx=(14, 4), pady=8)
+        tk.Label(status_bar, text='就绪', bg=nav_bg, fg='#9CA3AF',
                  font=('Microsoft YaHei', 8)).pack(side=tk.LEFT)
 
         # 默认激活 OCR识别
@@ -632,17 +641,22 @@ class OCRApp:
     def _set_active_nav(self, label):
         """设置当前激活的导航项"""
         self._active_nav = label
-        nav_bg = '#1E2A3A'
+        nav_bg = '#FFFFFF'
         for lbl, (item, icon_lbl, text_lbl, bar) in self._nav_buttons.items():
+            # content frame 是 item 的第二个子控件
+            children = item.winfo_children()
+            content = children[1] if len(children) > 1 else item
             if lbl == label:
-                item.config(bg='#1A6FD4')
-                icon_lbl.config(bg='#1A6FD4', fg='white')
-                text_lbl.config(bg='#1A6FD4', fg='white')
-                bar.config(bg='white')
+                for w in (item, content, icon_lbl, text_lbl):
+                    w.config(bg='#EFF6FF')
+                icon_lbl.config(fg='#1A6FD4')
+                text_lbl.config(fg='#1A6FD4', font=('Microsoft YaHei', 8, 'bold'))
+                bar.config(bg='#1A6FD4')
             else:
-                item.config(bg=nav_bg)
-                icon_lbl.config(bg=nav_bg, fg='#A8C4E0')
-                text_lbl.config(bg=nav_bg, fg='#C8D8E8')
+                for w in (item, content, icon_lbl, text_lbl):
+                    w.config(bg=nav_bg)
+                icon_lbl.config(fg='#9CA3AF')
+                text_lbl.config(fg='#9CA3AF', font=('Microsoft YaHei', 8))
                 bar.config(bg=nav_bg)
 
     def _show_import_dialog(self):
@@ -713,6 +727,9 @@ class OCRApp:
             frame.pack_forget()
         if name in self._nav_pages:
             self._nav_pages[name].pack(fill=tk.BOTH, expand=True)
+        # 切换到历史页时自动刷新表格
+        if name == '历史' and hasattr(self._page_history, '_refresh'):
+            self._page_history._refresh()
 
     def _nav_home(self):
         self._nav_to('OCR识别')
@@ -995,13 +1012,13 @@ class OCRApp:
         tbl_frame.pack(fill=tk.BOTH, expand=True, padx=24, pady=(0, 8))
         vsb = ttk.Scrollbar(tbl_frame, orient=tk.VERTICAL)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        cols = ('时间', '类型', '文件数', '总行数')
+        cols = ('时间', '名称', '类型', '页码', '总行数')
         htree = ttk.Treeview(tbl_frame, columns=cols, show='headings',
                              yscrollcommand=vsb.set, style='History.Treeview')
         vsb.config(command=htree.yview)
-        for col, w in zip(cols, [180, 100, 80, 80]):
+        for col, w, anchor in zip(cols, [160, 200, 90, 60, 70], ['center', 'w', 'center', 'center', 'center']):
             htree.heading(col, text=col)
-            htree.column(col, width=w, anchor='center')
+            htree.column(col, width=w, anchor=anchor)
         htree.pack(fill=tk.BOTH, expand=True)
 
         # 底部按钮
@@ -1063,20 +1080,28 @@ class OCRApp:
             kw = search_var.get().strip().lower()
             htree.delete(*htree.get_children())
             for i, item in enumerate(self.history_data):
-                ts   = item.get('timestamp', '')
-                typ  = item.get('type', '')
-                fc   = item.get('file_count', 0)
-                tl   = item.get('total_lines', 0)
+                ts    = item.get('timestamp', '')
+                typ   = item.get('type', '')
+                fc    = item.get('file_count', 0)
+                tl    = item.get('total_lines', 0)
+                files = item.get('files', [])
+                # 优先用 book_name，没有则用文件名
+                name  = item.get('book_name', '')
+                if not name:
+                    if len(files) == 1:
+                        name = files[0].get('name', '')
+                    elif len(files) > 1:
+                        name = f'{files[0].get("name", "")} 等{len(files)}个文件'
+                page_no = item.get('page_no', '')
                 if kw:
-                    # 搜索时间、类型、文件名、识别内容
-                    searchable = f'{ts}{typ}'
-                    for f in item.get('files', []):
+                    searchable = f'{ts}{typ}{name}{page_no}'
+                    for f in files:
                         searchable += f.get('name', '')
                         searchable += ' '.join(f.get('content', []))
                     if kw not in searchable.lower():
                         continue
                 htree.insert('', tk.END, iid=f'h_{i}',
-                             values=(ts, typ, fc, tl))
+                             values=(ts, name, typ, page_no, tl))
 
         for text, cmd, bg, fg in [
             ('📋 复制解析', parse_selected_item, '#EFF6FF', '#1A6FD4'),
@@ -1287,7 +1312,7 @@ class OCRApp:
 
         self._step_btns = {}
         steps = [
-            ('交互绘图', '识别并标注区域'),
+            ('交互绘图', '标注识别区域'),
             ('分类表格', '生成结构化数据'),
             ('文本报告', '生成识别报告'),
         ]
@@ -1296,24 +1321,26 @@ class OCRApp:
             col = tk.Frame(step_inner, bg=BG)
             col.pack(side=tk.LEFT)
             num_lbl = tk.Label(col, text=f' {i+1} ', bg='#E5E7EB', fg='#6B7280',
-                               font=('Microsoft YaHei', 9, 'bold'), padx=6, pady=2)
-            num_lbl.pack(side=tk.LEFT, padx=(0, 6), pady=10)
+                               font=('Microsoft YaHei', 9, 'bold'),
+                               padx=6, pady=3, relief='flat')
+            num_lbl.pack(side=tk.LEFT, padx=(0, 8), pady=12)
             txt_col = tk.Frame(col, bg=BG)
-            txt_col.pack(side=tk.LEFT, pady=6)
+            txt_col.pack(side=tk.LEFT, pady=8)
             name_lbl = tk.Label(txt_col, text=name, bg=BG, fg='#6B7280',
                                 font=('Microsoft YaHei', 9, 'bold'), cursor='hand2')
             name_lbl.pack(anchor='w')
             sub_lbl = tk.Label(txt_col, text=sub, bg=BG, fg='#9CA3AF',
                                font=('Microsoft YaHei', 7))
             sub_lbl.pack(anchor='w')
-            bar = tk.Frame(col, bg=BG, height=3)
+            # 底部指示线
+            bar = tk.Frame(col, bg=BG, height=2)
             bar.pack(fill=tk.X)
             self._step_btns[name] = (col, num_lbl, name_lbl, sub_lbl, bar)
             for w in (col, num_lbl, name_lbl, sub_lbl):
                 w.bind('<Button-1>', lambda e, n=name, ix=i: self._step_switch(n, ix))
             if i < len(steps) - 1:
                 tk.Label(step_inner, text='›', bg=BG, fg='#D1D5DB',
-                         font=('Arial', 14)).pack(side=tk.LEFT, padx=6)
+                         font=('Arial', 16)).pack(side=tk.LEFT, padx=8)
 
         # ── 右侧内容区 ──
         self._right_content = tk.Frame(main_right, bg=BG)
@@ -1354,42 +1381,60 @@ class OCRApp:
         self.root.after(100, self.apply_font_style)
 
     def _build_left_ocr_panel(self, PANEL_BG, BORDER, BLUE):
-        """构建左侧操作面板"""
+        """构建左侧操作面板 — 卡片风格"""
         left_panel = self._ocr_left
+        BG = '#F7F9FC'
+        left_panel.configure(bg=BG)
 
-        def section(parent, title):
-            f = tk.Frame(parent, bg=PANEL_BG)
-            f.pack(fill=tk.X, padx=14, pady=(12, 0))
-            tk.Label(f, text=title, bg=PANEL_BG, fg='#374151',
-                     font=('Microsoft YaHei', 9, 'bold')).pack(anchor='w', pady=(0, 6))
-            return f
+        def card(parent, title):
+            """创建卡片式分组"""
+            outer = tk.Frame(parent, bg=BG)
+            outer.pack(fill=tk.X, padx=10, pady=(8, 0))
+            tk.Label(outer, text=title, bg=BG, fg='#374151',
+                     font=('Microsoft YaHei', 9, 'bold')).pack(anchor='w', pady=(0, 4))
+            inner = tk.Frame(outer, bg='white',
+                             highlightthickness=1, highlightbackground='#E5E7EB')
+            inner.pack(fill=tk.X)
+            return inner
 
-        sec1 = section(left_panel, '1. 导入图片')
-        drop_zone = tk.Frame(sec1, bg='white', highlightthickness=1,
-                             highlightbackground=BORDER, cursor='hand2')
-        drop_zone.pack(fill=tk.X)
+        # ── 1. 导入图片 ──
+        drop_card = card(left_panel, '1. 导入图片')
+        drop_zone = tk.Frame(drop_card, bg='white', cursor='hand2')
+        drop_zone.pack(fill=tk.X, padx=12, pady=10)
         self.drop_zone = drop_zone
-        tk.Label(drop_zone, text='🖼', bg='white', fg='#9CA3AF',
-                 font=('Arial', 22)).pack(pady=(14, 4))
+
+        tk.Label(drop_zone, text='🖼', bg='white', fg='#BFDBFE',
+                 font=('Arial', 28)).pack(pady=(8, 4))
         self.file_label = tk.Label(drop_zone, text='拖拽图片到此处\n或',
                                    bg='white', fg='#9CA3AF',
-                                   font=('Microsoft YaHei', 9), justify='center')
+                                   font=('Microsoft YaHei', 8), justify='center')
         self.file_label.pack()
         self.select_btn = tk.Button(drop_zone, text='选择图片',
                                     command=self.select_file,
                                     bg=BLUE, fg='white', relief='flat',
                                     font=('Microsoft YaHei', 9, 'bold'),
-                                    padx=18, pady=5, cursor='hand2')
-        self.select_btn.pack(pady=(6, 14))
-        tk.Label(sec1, text='支持 JPG / PNG / BMP / TIFF',
-                 bg=PANEL_BG, fg='#9CA3AF',
-                 font=('Microsoft YaHei', 8)).pack(anchor='w', pady=(4, 0))
+                                    padx=20, pady=6, cursor='hand2')
+        self.select_btn.pack(pady=(6, 10))
 
-        self.progress_frame = tk.Frame(left_panel, bg=PANEL_BG)
-        self.progress_frame.pack(fill=tk.X, padx=14, pady=(6, 0))
+        tk.Label(drop_card, text='支持 JPG / PNG / BMP / TIFF',
+                 bg='white', fg='#9CA3AF',
+                 font=('Microsoft YaHei', 7)).pack(anchor='w', padx=12, pady=(0, 4))
+
+        # 清空按钮
+        clear_row = tk.Frame(drop_card, bg='white')
+        clear_row.pack(fill=tk.X, padx=12, pady=(0, 8))
+        self.clear_btn = tk.Button(clear_row, text='清空',
+                                   command=self.clear_result,
+                                   bg='white', fg='#9CA3AF', relief='flat',
+                                   font=('Microsoft YaHei', 8), cursor='hand2')
+        self.clear_btn.pack(side=tk.RIGHT)
+
+        # 进度 / 状态
+        self.progress_frame = tk.Frame(left_panel, bg=BG)
+        self.progress_frame.pack(fill=tk.X, padx=10, pady=(4, 0))
         self.progress_label = tk.Label(self.progress_frame, text='',
-                                       bg=PANEL_BG, fg='#2563EB',
-                                       font=('Microsoft YaHei', 8),
+                                       bg=BG, fg='#F59E0B',
+                                       font=('Microsoft YaHei', 7),
                                        wraplength=190, justify='left')
         self.progress_label.pack(anchor='w')
         acc_range = f"{self.size_limits['accurate_min_width']}~{self.size_limits['accurate_max_width']}x{self.size_limits['accurate_min_height']}~{self.size_limits['accurate_max_height']}"
@@ -1397,17 +1442,17 @@ class OCRApp:
         gen_range = f"{self.size_limits['general_min_width']}~{self.size_limits['general_max_width']}x{self.size_limits['general_min_height']}~{self.size_limits['general_max_height']}"
         self.size_hint_label = tk.Label(self.progress_frame,
                                         text=f"高精度({acc_range})\n快速({bas_range})\n通用({gen_range})",
-                                        bg=PANEL_BG, fg='#9CA3AF',
+                                        bg=BG, fg='#9CA3AF',
                                         font=('Microsoft YaHei', 7), justify='left')
-        self.size_hint_label.pack(anchor='w', pady=(2, 0))
+        self.size_hint_label.pack(anchor='w')
 
-        sec2 = section(left_panel, '2. 识别设置')
-        tk.Label(sec2, text='识别模式', bg=PANEL_BG, fg='#6B7280',
-                 font=('Microsoft YaHei', 8)).pack(anchor='w', pady=(0, 4))
-        mode_row = tk.Frame(sec2, bg=PANEL_BG)
-        mode_row.pack(fill=tk.X)
+        # ── 2. 识别设置 ──
+        mode_card = card(left_panel, '2. 识别设置')
+        tk.Label(mode_card, text='识别模式', bg='white', fg='#6B7280',
+                 font=('Microsoft YaHei', 8)).pack(anchor='w', padx=12, pady=(8, 4))
+        mode_row = tk.Frame(mode_card, bg='white')
+        mode_row.pack(fill=tk.X, padx=12, pady=(0, 10))
 
-        # 当前选中的识别模式
         self._selected_ocr_mode = tk.StringVar(value='accurate')
 
         def _select_mode(mode, btn):
@@ -1416,19 +1461,20 @@ class OCRApp:
             self._selected_ocr_mode.set(mode)
             for m, b in _mode_btns.items():
                 if m == mode:
-                    b.config(bg=BLUE, fg='white', relief='flat')
+                    b.config(bg=BLUE, fg='white',
+                             highlightthickness=0)
                 else:
-                    b.config(bg='white', fg=BLUE,
-                             relief='flat', highlightthickness=1,
-                             highlightbackground=BLUE)
+                    b.config(bg='white', fg='#374151',
+                             highlightthickness=1,
+                             highlightbackground='#E5E7EB')
 
         _mode_btns = {}
         for mode, text in [('accurate', '高精度'), ('basic', '快速'), ('general', '通用')]:
             b = tk.Button(mode_row, text=text,
                           bg='white', fg='#9CA3AF', relief='flat',
-                          highlightthickness=1, highlightbackground='#DDE3EA',
-                          font=('Microsoft YaHei', 8, 'bold'),
-                          padx=6, pady=5, cursor='hand2', state=tk.DISABLED)
+                          highlightthickness=1, highlightbackground='#E5E7EB',
+                          font=('Microsoft YaHei', 8),
+                          padx=8, pady=5, cursor='hand2', state=tk.DISABLED)
             b.pack(side=tk.LEFT, padx=(0, 4))
             b.bind('<Button-1>', lambda e, m=mode, btn=b: _select_mode(m, btn))
             _mode_btns[mode] = b
@@ -1439,57 +1485,99 @@ class OCRApp:
         self._mode_btns      = _mode_btns
         self._select_mode_fn = _select_mode
 
-        sec3 = section(left_panel, '3. 图片处理')
-        proc_row = tk.Frame(sec3, bg=PANEL_BG)
-        proc_row.pack(fill=tk.X)
+        # ── 3. 图片处理 ──
+        proc_card = card(left_panel, '3. 图片处理')
+        proc_row = tk.Frame(proc_card, bg='white')
+        proc_row.pack(fill=tk.X, padx=12, pady=8)
         for text, cmd in [('拼接', self.merge_images),
                            ('截图', self.start_screenshot_capture),
                            ('裁剪', self.crop_and_merge_direct)]:
             tk.Button(proc_row, text=text, command=cmd,
                       bg='white', fg='#374151', relief='flat',
-                      highlightthickness=1, highlightbackground=BORDER,
-                      font=('Microsoft YaHei', 8), padx=8, pady=5,
-                      cursor='hand2').pack(side=tk.LEFT, padx=(0, 4))
+                      highlightthickness=1, highlightbackground='#E5E7EB',
+                      font=('Microsoft YaHei', 8), padx=10, pady=5,
+                      cursor='hand2').pack(side=tk.LEFT, padx=(0, 6))
         self.merge_btn      = proc_row.winfo_children()[0]
         self.screenshot_btn = proc_row.winfo_children()[1]
         self.crop_merge_btn = proc_row.winfo_children()[2]
 
-        # 4. 绘图模式切换
-        sec4 = section(left_panel, '4. 绘图模式')
-        for text, val in [('🖱 直线模式（左键加线/右键删线）', False),
-                           ('🎯 圈选模式（画圈提取数据）', True)]:
-            tk.Radiobutton(sec4, text=text,
+        # ── 4. 绘图模式 ──
+        draw_card = card(left_panel, '4. 绘图模式')
+        for text, val in [('🖱  直线模式（左键加线/右键删线）', False),
+                           ('🎯  圈选模式（画圈提取数据）', True)]:
+            tk.Radiobutton(draw_card, text=text,
                            variable=self.enable_lasso_mode, value=val,
                            command=self.update_plot_view,
-                           bg=PANEL_BG, font=('Microsoft YaHei', 9),
-                           wraplength=190, justify='left').pack(
-                               anchor='w', pady=2)
+                           bg='white', fg='#374151',
+                           font=('Microsoft YaHei', 8),
+                           activebackground='white',
+                           wraplength=180, justify='left').pack(
+                               anchor='w', padx=12, pady=4)
+        tk.Frame(draw_card, bg=BG, height=4).pack()
 
-        tk.Frame(left_panel, bg=BORDER, height=1).pack(fill=tk.X, padx=14, pady=14)
-        self.copy_btn = tk.Button(left_panel, text='▶  开始识别',
+        # ── 书籍信息 ──
+        book_card = card(left_panel, '5. 书籍信息')
+        book_inner = tk.Frame(book_card, bg='white')
+        book_inner.pack(fill=tk.X, padx=12, pady=(6, 8))
+
+        tk.Label(book_inner, text='书名', bg='white', fg='#6B7280',
+                 font=('Microsoft YaHei', 8)).grid(row=0, column=0, sticky='w', pady=2)
+        self._book_name_var = tk.StringVar(value=self.store.get('book_name', ''))
+        book_name_entry = tk.Entry(book_inner, textvariable=self._book_name_var,
+                                   font=('Microsoft YaHei', 8), relief='flat',
+                                   highlightthickness=1, highlightbackground='#E5E7EB',
+                                   width=16)
+        book_name_entry.grid(row=0, column=1, sticky='ew', padx=(6, 0), pady=2, ipady=3)
+
+        tk.Label(book_inner, text='当前页', bg='white', fg='#6B7280',
+                 font=('Microsoft YaHei', 8)).grid(row=1, column=0, sticky='w', pady=2)
+        self._book_page_var = tk.StringVar(value=str(self.store.get('book_page', 1)))
+        page_entry = tk.Entry(book_inner, textvariable=self._book_page_var,
+                              font=('Microsoft YaHei', 8), relief='flat',
+                              highlightthickness=1, highlightbackground='#E5E7EB',
+                              width=16)
+        page_entry.grid(row=1, column=1, sticky='ew', padx=(6, 0), pady=2, ipady=3)
+        book_inner.columnconfigure(1, weight=1)
+
+        def _save_book_name(*_):
+            self.store.set('book_name', self._book_name_var.get().strip())
+
+        def _save_book_page(*_):
+            try:
+                page_no = int(self._book_page_var.get())
+                self.store.set('book_page', page_no)
+                if not getattr(self, '_suppress_book_page_trace', False):
+                    self._pending_history_book_page = page_no
+            except ValueError:
+                pass
+
+        self._book_name_var.trace_add('write', _save_book_name)
+        self._book_page_var.trace_add('write', _save_book_page)
+
+        # ── 开始识别按钮 ──
+        tk.Frame(left_panel, bg=BG, height=8).pack()
+        self.copy_btn = tk.Button(left_panel, text='▶   开始识别',
                                   command=self._start_ocr_and_parse,
                                   bg=BLUE, fg='white', relief='flat',
                                   font=('Microsoft YaHei', 10, 'bold'),
-                                  pady=10, cursor='hand2', state=tk.DISABLED)
-        self.copy_btn.pack(fill=tk.X, padx=14, pady=(0, 6))
+                                  pady=11, cursor='hand2', state=tk.DISABLED)
+        self.copy_btn.pack(fill=tk.X, padx=10, pady=(0, 6))
 
-        aux_row = tk.Frame(left_panel, bg=PANEL_BG)
-        aux_row.pack(fill=tk.X, padx=14)
+        # 辅助按钮
+        aux_row = tk.Frame(left_panel, bg=BG)
+        aux_row.pack(fill=tk.X, padx=10)
         for text, cmd in [('加|0|0', self.add_zeros_to_lines),
-                           ('导出',   self.export_results),
-                           ('清空',   self.clear_result)]:
+                           ('导出',   self.export_results)]:
             tk.Button(aux_row, text=text, command=cmd,
-                      bg='white', fg='#374151', relief='flat',
-                      highlightthickness=1, highlightbackground=BORDER,
-                      font=('Microsoft YaHei', 8), padx=6, pady=4,
-                      cursor='hand2').pack(side=tk.LEFT, padx=(0, 4))
+                      bg='white', fg='#6B7280', relief='flat',
+                      highlightthickness=1, highlightbackground='#E5E7EB',
+                      font=('Microsoft YaHei', 8), padx=8, pady=4,
+                      cursor='hand2').pack(side=tk.LEFT, padx=(0, 6))
         self.add_zeros_btn = aux_row.winfo_children()[0]
         self.export_btn    = aux_row.winfo_children()[1]
-        self.clear_btn     = aux_row.winfo_children()[2]
 
-        # text_input 隐藏控件，load_from_text 需要它做数据中转
         self.text_input = tk.Text(left_panel, height=1, font=('Consolas', 10))
-        # 不 pack
+        # 不 pack，仅数据中转
 
     def _build_ocr_preview_page(self, BG, BORDER):
         """构建步骤1识别结果预览页"""
@@ -1545,7 +1633,7 @@ class OCRApp:
         # 识别完成的回调：解析并跳到交互绘图
         def _after_ocr():
             self.copy_and_parse_text()
-            self.root.after(400, lambda: self._step_switch('分类表格', 1))
+            self.root.after(400, lambda: self._step_switch('交互绘图', 0))
 
         # 根据选中模式启动识别线程，识别结束时调用回调
         if mode == 'accurate':
@@ -1588,11 +1676,13 @@ class OCRApp:
         for n, (col, num_lbl, name_lbl, sub_lbl, bar) in self._step_btns.items():
             if n == name:
                 num_lbl.config(bg=BLUE, fg='white')
-                name_lbl.config(fg=BLUE)
+                name_lbl.config(fg=BLUE, font=('Microsoft YaHei', 9, 'bold'))
+                sub_lbl.config(fg='#60A5FA')
                 bar.config(bg=BLUE)
             else:
                 num_lbl.config(bg='#E5E7EB', fg='#6B7280')
-                name_lbl.config(fg='#6B7280')
+                name_lbl.config(fg='#6B7280', font=('Microsoft YaHei', 9))
+                sub_lbl.config(fg='#9CA3AF')
                 bar.config(bg=BG)
 
         for frame in self._classifier_pages.values():
@@ -3390,8 +3480,20 @@ class OCRApp:
         s = self.current_font_size
         # 更新 Treeview 样式 — 只改字体和行高，不动内部布局
         style = ttk.Style()
-        style.configure("Treeview", font=("Microsoft YaHei", s), rowheight=max(int(s * 2.2), s + 10))
-        style.configure("Treeview.Heading", font=("Microsoft YaHei", s, "bold"))
+        style.configure("Treeview",
+                        font=("Microsoft YaHei", s),
+                        rowheight=max(int(s * 2.2), s + 10),
+                        background="white",
+                        fieldbackground="white")
+        style.configure("Treeview.Heading",
+                        font=("Microsoft YaHei", max(s - 1, 8)),
+                        foreground="#6B7280",
+                        background="#F7F9FC",
+                        relief="flat",
+                        borderwidth=0)
+        style.map("Treeview.Heading",
+                  background=[("active", "#EFF6FF")],
+                  foreground=[("active", "#1A6FD4")])
 
         # 更新特定标签样式 - 标记状态只改变背景色，不改变字体和颜色
         self.tree.tag_configure('marked', background='#FFFACD')  # 浅黄色背景表示标记状态
@@ -6562,6 +6664,10 @@ class OCRApp:
 
         def close_and_run(action):
             option_window.destroy()
+            # 拖入图片后当前页 +1（取消则不递增）
+            if action != "cancel":
+                self._capture_history_book_page()
+                self._increment_book_page_for_import()
             if action == "accurate":
                 self._start_high_accuracy_recognition(image_files)
             elif action == "basic":
@@ -7108,6 +7214,9 @@ class OCRApp:
                 self.select_file_internal(file_paths[0])
             else:
                 self.batch_select_files_internal(list(file_paths))
+            # 导入新图片后，当前页 +1
+            self._capture_history_book_page()
+            self._increment_book_page_for_import()
     
     def batch_select_files_internal(self, file_paths):
         """内部方法：处理批量文件选择逻辑"""
@@ -8309,6 +8418,32 @@ class OCRApp:
         except Exception as e:
             print(f"⚠️ 保存历史记录失败: {e}")
     
+    def _increment_book_page_for_import(self):
+        """导入图片时把"当前页"+1。"""
+        if not hasattr(self, '_book_page_var'):
+            return
+        try:
+            page_no = int(self._book_page_var.get())
+        except (ValueError, TypeError):
+            return
+        next_page = page_no + 1
+        self._suppress_book_page_trace = True
+        try:
+            self._book_page_var.set(str(next_page))
+            self.store.set('book_page', next_page)
+        finally:
+            self._suppress_book_page_trace = False
+
+    def _capture_history_book_page(self):
+        """Remember the page number that belongs to the current import/recognition."""
+        if not hasattr(self, '_book_page_var'):
+            self._pending_history_book_page = None
+            return
+        try:
+            self._pending_history_book_page = int(self._book_page_var.get())
+        except (ValueError, TypeError):
+            self._pending_history_book_page = None
+
     def add_to_history(self, ocr_type, results):
         """添加识别结果到历史记录"""
         try:
@@ -8320,10 +8455,23 @@ class OCRApp:
             if not valid_results:
                 print("⚠️ 没有有效的识别结果，跳过保存历史记录")
                 return
-            
+
+            # 读取当前书名和页码（以书籍信息面板的当前页为准）
+            book_name = self._book_name_var.get().strip() if hasattr(self, '_book_name_var') else ''
+            try:
+                pending_page_no = getattr(self, '_pending_history_book_page', None)
+                if pending_page_no is not None:
+                    page_no = pending_page_no
+                else:
+                    page_no = int(self._book_page_var.get()) if hasattr(self, '_book_page_var') else ''
+            except (ValueError, TypeError):
+                page_no = ''
+
             history_item = {
                 'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 'type': ocr_type,
+                'book_name': book_name,
+                'page_no': str(page_no) if page_no != '' else '',
                 'file_count': len(valid_results),
                 'total_lines': sum(r['count'] for r in valid_results),
                 'files': []
@@ -8338,14 +8486,14 @@ class OCRApp:
                 }
                 history_item['files'].append(file_info)
                 print(f"  - {result['file']}: {result['count']} 行")
-            
+
             # 添加到历史记录列表开头
             self.history_data.insert(0, history_item)
-            
+
             # 限制历史记录数量
             if len(self.history_data) > self.history_limit:
                 self.history_data = self.history_data[:self.history_limit]
-            
+
             # 保存到文件
             self.save_history()
             print(f"✓ 历史记录添加成功：{history_item['file_count']} 个文件，{history_item['total_lines']} 行")
