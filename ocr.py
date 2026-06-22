@@ -619,11 +619,12 @@ class OCRApp:
         status_bar = tk.Frame(nav, bg=nav_bg,
                               highlightthickness=1, highlightbackground='#E5E7EB')
         status_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=0)
-        self._status_dot = tk.Label(status_bar, text='●', bg=nav_bg, fg='#22C55E',
+        self._status_dot = tk.Label(status_bar, text='●', bg=nav_bg, fg='#3B82F6',
                                     font=('Arial', 9))
         self._status_dot.pack(side=tk.LEFT, padx=(14, 4), pady=8)
-        tk.Label(status_bar, text='就绪', bg=nav_bg, fg='#9CA3AF',
-                 font=('Microsoft YaHei', 8)).pack(side=tk.LEFT)
+        self._status_text = tk.Label(status_bar, text='就绪', bg=nav_bg, fg='#9CA3AF',
+                 font=('Microsoft YaHei', 8))
+        self._status_text.pack(side=tk.LEFT)
 
         # 默认激活 OCR识别
         self._set_active_nav('OCR识别')
@@ -787,25 +788,29 @@ class OCRApp:
             'basic':    self._empty_ocr_stats(),
             'general':  self._empty_ocr_stats(),
         }
-        for day_data in self.stats.values():
+        # 按月汇总，用于计算月均
+        monthly = {}
+        for date, day_data in self.stats.items():
+            month = date[:7]
+            if month not in monthly:
+                monthly[month] = {m: self._empty_ocr_stats() for m in totals}
             for mode in totals:
                 s = day_data.get(mode, {})
                 for k in totals[mode]:
                     totals[mode][k] += s.get(k, 0)
+                    monthly[month][mode][k] += s.get(k, 0)
 
         total_days = len(self.stats)
+        total_months = len(monthly) or 1
         success_col = '成功(含缓存)' if self.stats_count_cache_as_success else '接口成功'
 
         # 汇总卡片
         cards = tk.Frame(parent, bg=BG)
         cards.pack(fill=tk.X, padx=16, pady=(12, 16))
-        total_processed = sum(totals[m]['processed'] for m in totals)
-        total_lines     = sum(totals[m]['lines']     for m in totals)
-        total_cached    = sum(totals[m]['cached']    for m in totals)
+        total_cached = sum(totals[m]['cached'] for m in totals)
         for label, val in [('使用天数', f'{total_days} 天'),
-                            ('总处理图片', f'{total_processed} 张'),
-                            ('总输出行数', f'{total_lines} 行'),
-                            ('缓存复用',   f'{total_cached} 次')]:
+                            ('使用月数', f'{total_months} 月'),
+                            ('缓存复用', f'{total_cached} 次')]:
             card = tk.Frame(cards, bg='#F0F7FF', highlightthickness=1,
                             highlightbackground='#BFDBFE')
             card.pack(side=tk.LEFT, padx=(0, 12), pady=4, ipadx=18, ipady=12)
@@ -814,30 +819,37 @@ class OCRApp:
             tk.Label(card, text=label, bg='#F0F7FF', fg='#6B7280',
                      font=('Microsoft YaHei', 8)).pack()
 
-        # 三种模式详细
+        # 三种模式详细（只显示高精度和通用）
         BORDER = '#DDE3EA'
         for mode, title, bg_c in [
             ('accurate', '高精度识别', '#E3F2FD'),
-            ('basic',    '快速识别',   '#FFF3E0'),
             ('general',  '通用识别',   '#F3E5F5'),
         ]:
             s = totals[mode]
             days = total_days or 1
+
+            # 计算每月日均接口成功（不含缓存）
+            month_daily_avgs = []
+            for month, mdata in monthly.items():
+                month_days = sum(1 for d in self.stats if d[:7] == month) or 1
+                api_success = mdata[mode]['success'] - mdata[mode]['cached']
+                month_daily_avgs.append(max(api_success, 0) / month_days)
+            avg_per_day = sum(month_daily_avgs) / len(month_daily_avgs) if month_daily_avgs else 0
+
             sec = tk.Frame(parent, bg=bg_c, highlightthickness=1,
                            highlightbackground=BORDER)
             sec.pack(fill=tk.X, padx=16, pady=(0, 8), ipadx=10, ipady=8)
             tk.Label(sec, text=f'【{title}】', bg=bg_c, fg='#374151',
                      font=('Microsoft YaHei', 10, 'bold')).pack(anchor='w', padx=8, pady=(6, 2))
-            info = (f"处理批次：{s['count']} 次   处理图片：{s['processed']} 张   "
-                    f"{success_col}：{s['success']} 张   缓存复用：{s['cached']} 张   "
-                    f"输出行数：{s['lines']} 行   日均：{s['processed']/days:.1f} 张/天")
+            info = (f"{success_col}：{s['success']} 张   缓存复用：{s['cached']} 张   "
+                    f"月均日接口成功：{avg_per_day:.1f} 张/天")
             tk.Label(sec, text=info, bg=bg_c, fg='#374151',
                      font=('Microsoft YaHei', 9)).pack(anchor='w', padx=8, pady=(0, 6))
 
     def _render_daily_stats(self, parent):
         """渲染按日统计表格"""
         success_col = '成功(含缓存)' if self.stats_count_cache_as_success else '接口成功'
-        cols = ('日期', '类型', '批次', '处理', success_col, '缓存', '失败', '行数')
+        cols = ('日期', '类型', success_col, '缓存', '失败', '行数')
 
         frame = tk.Frame(parent, bg='white')
         frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
@@ -858,7 +870,7 @@ class OCRApp:
         tree = ttk.Treeview(frame, columns=cols, show='headings',
                             yscrollcommand=vsb.set)
         vsb.config(command=tree.yview)
-        widths = [120, 70, 55, 65, 90, 65, 55, 75]
+        widths = [120, 70, 90, 65, 55, 75]
         for col, w in zip(cols, widths):
             tree.heading(col, text=col)
             tree.column(col, width=w, anchor='center')
@@ -879,19 +891,9 @@ class OCRApp:
                     lbl = {'accurate':'高精度','basic':'快速','general':'通用'}[mode]
                     tree.insert('', tk.END, iid=f'{date}_{mode}', tags=(tag,),
                                 values=(date if first else '', lbl,
-                                        s.get('count',0), s.get('processed',0),
                                         s.get('success',0), s.get('cached',0),
                                         s.get('failed',0), s.get('lines',0)))
                     first = False
-                acc=d.get('accurate',{}); bas=d.get('basic',{}); gen=d.get('general',{})
-                tree.insert('', tk.END, iid=f'{date}_total', tags=('total',),
-                            values=('','日合计',
-                                    acc.get('count',0)+bas.get('count',0)+gen.get('count',0),
-                                    acc.get('processed',0)+bas.get('processed',0)+gen.get('processed',0),
-                                    acc.get('success',0)+bas.get('success',0)+gen.get('success',0),
-                                    acc.get('cached',0)+bas.get('cached',0)+gen.get('cached',0),
-                                    acc.get('failed',0)+bas.get('failed',0)+gen.get('failed',0),
-                                    acc.get('lines',0)+bas.get('lines',0)+gen.get('lines',0)))
 
         def on_select(e):
             sel = tree.selection()
@@ -924,7 +926,7 @@ class OCRApp:
     def _render_monthly_stats(self, parent):
         """渲染按月统计表格"""
         success_col = '成功(含缓存)' if self.stats_count_cache_as_success else '接口成功'
-        cols = ('月份', '天数', '类型', '批次', '处理', success_col, '缓存', '行数', '日均')
+        cols = ('月份', '天数', '类型', success_col, '缓存', '日均接口成功', '日均缓存')
 
         frame = tk.Frame(parent, bg='white')
         frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
@@ -933,7 +935,7 @@ class OCRApp:
         tree = ttk.Treeview(frame, columns=cols, show='headings',
                             yscrollcommand=vsb.set)
         vsb.config(command=tree.yview)
-        widths = [90, 55, 65, 55, 65, 90, 65, 75, 80]
+        widths = [90, 55, 65, 90, 65, 80, 80]
         for col, w in zip(cols, widths):
             tree.heading(col, text=col)
             tree.column(col, width=w, anchor='center')
@@ -965,22 +967,13 @@ class OCRApp:
             for mode, tag in [('accurate','accurate'),('basic','basic'),('general','general')]:
                 s = d[mode]
                 lbl = {'accurate':'高精度','basic':'快速','general':'通用'}[mode]
+                api_success = max(s['success'] - s['cached'], 0)
                 tree.insert('', tk.END, tags=(tag,),
                             values=(month if first else '', days if first else '',
-                                    lbl, s['count'], s['processed'],
-                                    s['success'], s['cached'], s['lines'],
-                                    f"{s['processed']/days:.1f}"))
+                                    lbl, s['success'], s['cached'],
+                                    f"{api_success/days:.1f}",
+                                    f"{s['cached']/days:.1f}"))
                 first = False
-            acc=d['accurate']; bas=d['basic']; gen=d['general']
-            tp = acc['processed']+bas['processed']+gen['processed']
-            tree.insert('', tk.END, tags=('total',),
-                        values=('', '', '月合计',
-                                acc['count']+bas['count']+gen['count'],
-                                tp,
-                                acc['success']+bas['success']+gen['success'],
-                                acc['cached']+bas['cached']+gen['cached'],
-                                acc['lines']+bas['lines']+gen['lines'],
-                                f"{tp/days:.1f}"))
 
     def _render_stats_inline(self, parent):
         """兼容旧调用"""
@@ -1659,10 +1652,12 @@ class OCRApp:
         self.general_ocr_btn.config(state=tk.DISABLED)
         self.select_btn.config(state=tk.DISABLED)
         self.copy_btn.config(state=tk.DISABLED)
+        self._set_status('running')
 
         def _thread_wrapper():
             thread_func()
             self.root.after(0, callback)
+            self.root.after(0, lambda: self._set_status('done'))
 
         import threading
         threading.Thread(target=_thread_wrapper, daemon=True).start()
@@ -4119,6 +4114,21 @@ class OCRApp:
         # 这个方法现在被 start_inline_edit 替代，但保留以防需要
         self.start_inline_edit(iid, '#0')
     
+    def _set_status(self, state):
+        """更新左下角状态栏：idle=蓝色就绪，running=黄色识别中，done=绿色识别成功"""
+        if not hasattr(self, '_status_dot') or not hasattr(self, '_status_text'):
+            return
+        if state == 'running':
+            self._status_dot.config(fg='#F59E0B')
+            self._status_text.config(text='识别中')
+        elif state == 'done':
+            self._status_dot.config(fg='#22C55E')
+            self._status_text.config(text='识别成功')
+            self.root.after(3000, lambda: self._set_status('idle'))
+        else:
+            self._status_dot.config(fg='#3B82F6')
+            self._status_text.config(text='就绪')
+
     def show_toast(self, message, duration=3000):
         """右下角弹出自动消失的 Toast 通知"""
         try:
@@ -6494,7 +6504,7 @@ class OCRApp:
                 messagebox.showwarning("提示", f"请拖放图片文件！\n\n找到 {len(cleaned_files)} 个文件，但都不是图片格式\n支持格式：JPG, PNG, BMP等")
                 return
             
-            self._show_drop_preview_options(image_files)
+            self._handle_dropped_images(image_files)
         
         except Exception as e:
             print(f"拖放处理错误: {e}")
@@ -6603,6 +6613,65 @@ class OCRApp:
             return "推荐：快速识别", "basic", "图片尺寸更适合快速识别。"
 
         return "推荐：裁剪识别", "crop", "部分图片尺寸不符合识别范围，建议先裁剪或调整。"
+
+    def _handle_dropped_images(self, image_files):
+        """处理拖入的图片：单张直接识别，两张询问是否拼接，多张直接批量识别"""
+        self._increment_book_page_for_import()
+
+        count = len(image_files)
+
+        if count == 1:
+            # 单张：直接按当前选中模式识别
+            self.select_file_internal(image_files[0])
+            mode = getattr(self, '_selected_ocr_mode', tk.StringVar()).get()
+            self.root.after(200, lambda: self._start_ocr_and_parse())
+
+        elif count == 2:
+            # 两张：询问是否拼接
+            win = tk.Toplevel(self.root)
+            win.title('两张图片')
+            win.transient(self.root)
+            win.grab_set()
+            win.resizable(False, False)
+            win.configure(bg='white')
+
+            sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+            w, h = 360, 160
+            win.geometry(f'{w}x{h}+{(sw-w)//2}+{(sh-h)//2}')
+
+            tk.Label(win, text='检测到 2 张图片', bg='white', fg='#111827',
+                     font=('Microsoft YaHei', 12, 'bold')).pack(pady=(20, 6))
+            tk.Label(win, text='是否先拼接再识别？', bg='white', fg='#6B7280',
+                     font=('Microsoft YaHei', 9)).pack(pady=(0, 16))
+
+            btn_row = tk.Frame(win, bg='white')
+            btn_row.pack()
+
+            def do_merge():
+                win.destroy()
+                self._merge_images_from_drag(image_files)
+
+            def do_batch():
+                win.destroy()
+                self.batch_select_files_internal(image_files)
+                self.root.after(200, lambda: self._start_ocr_and_parse())
+
+            tk.Button(btn_row, text='拼接识别', command=do_merge,
+                      bg='#1A6FD4', fg='white', relief='flat',
+                      font=('Microsoft YaHei', 10, 'bold'),
+                      padx=20, pady=7, cursor='hand2').pack(side=tk.LEFT, padx=(0, 8))
+            tk.Button(btn_row, text='分别识别', command=do_batch,
+                      bg='#F3F4F6', fg='#374151', relief='flat',
+                      font=('Microsoft YaHei', 10),
+                      padx=20, pady=7, cursor='hand2').pack(side=tk.LEFT)
+
+            win.bind('<Return>', lambda e: do_merge())
+            win.bind('<Escape>', lambda e: win.destroy())
+
+        else:
+            # 多张：直接批量识别
+            self.batch_select_files_internal(image_files)
+            self.root.after(200, lambda: self._start_ocr_and_parse())
 
     def _show_drop_preview_options(self, image_files):
         """显示拖入图片预览和推荐操作。"""
@@ -7536,7 +7605,7 @@ class OCRApp:
             success_count = sum(1 for r in self.all_results if r['count'] > 0)
             api_success_count = success_count - cached_count
             skipped_count = sum(1 for r in self.all_results if r.get('skipped', False))
-            failed_count = total - api_success_count - cached_count - skipped_count
+            failed_count = sum(1 for r in self.all_results if r.get('error') and not r.get('skipped', False))
             total_lines = sum(r['count'] for r in self.all_results)
             api_lines = total_lines - cached_lines
             stats_success_count = success_count if self.stats_count_cache_as_success else api_success_count
@@ -7791,7 +7860,7 @@ class OCRApp:
             success_count = sum(1 for r in self.all_results if r['count'] > 0)
             api_success_count = success_count - cached_count
             skipped_count = sum(1 for r in self.all_results if r.get('skipped', False))
-            failed_count = total - api_success_count - cached_count - skipped_count
+            failed_count = sum(1 for r in self.all_results if r.get('error') and not r.get('skipped', False))
             total_lines = sum(r['count'] for r in self.all_results)
             api_lines = total_lines - cached_lines
             stats_success_count = success_count if self.stats_count_cache_as_success else api_success_count
@@ -7959,7 +8028,7 @@ class OCRApp:
             success_count = sum(1 for r in self.all_results if r['count'] > 0)
             api_success_count = success_count - cached_count
             skipped_count = sum(1 for r in self.all_results if r.get('skipped', False))
-            failed_count = total - api_success_count - cached_count - skipped_count
+            failed_count = sum(1 for r in self.all_results if r.get('error') and not r.get('skipped', False))
             total_lines = sum(r['count'] for r in self.all_results)
             api_lines = total_lines - cached_lines
             stats_success_count = success_count if self.stats_count_cache_as_success else api_success_count
@@ -8459,11 +8528,7 @@ class OCRApp:
             # 读取当前书名和页码（以书籍信息面板的当前页为准）
             book_name = self._book_name_var.get().strip() if hasattr(self, '_book_name_var') else ''
             try:
-                pending_page_no = getattr(self, '_pending_history_book_page', None)
-                if pending_page_no is not None:
-                    page_no = pending_page_no
-                else:
-                    page_no = int(self._book_page_var.get()) if hasattr(self, '_book_page_var') else ''
+                page_no = int(self._book_page_var.get()) if hasattr(self, '_book_page_var') else ''
             except (ValueError, TypeError):
                 page_no = ''
 
