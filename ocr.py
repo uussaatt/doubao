@@ -832,8 +832,12 @@ class OCRApp:
             month_daily_avgs = []
             for month, mdata in monthly.items():
                 month_days = sum(1 for d in self.stats if d[:7] == month) or 1
-                api_success = mdata[mode]['success'] - mdata[mode]['cached']
-                month_daily_avgs.append(max(api_success, 0) / month_days)
+                ms = mdata[mode]
+                if self.stats_count_cache_as_success:
+                    api_success = max(ms['success'] - ms['cached'], 0)
+                else:
+                    api_success = ms['success']
+                month_daily_avgs.append(api_success / month_days)
             avg_per_day = sum(month_daily_avgs) / len(month_daily_avgs) if month_daily_avgs else 0
 
             sec = tk.Frame(parent, bg=bg_c, highlightthickness=1,
@@ -849,7 +853,7 @@ class OCRApp:
     def _render_daily_stats(self, parent):
         """渲染按日统计表格"""
         success_col = '成功(含缓存)' if self.stats_count_cache_as_success else '接口成功'
-        cols = ('日期', '类型', success_col, '缓存', '失败', '行数')
+        cols = ('日期', '类型', success_col, '缓存', '失败')
 
         frame = tk.Frame(parent, bg='white')
         frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
@@ -870,7 +874,7 @@ class OCRApp:
         tree = ttk.Treeview(frame, columns=cols, show='headings',
                             yscrollcommand=vsb.set)
         vsb.config(command=tree.yview)
-        widths = [120, 70, 90, 65, 55, 75]
+        widths = [120, 70, 90, 65, 55]
         for col, w in zip(cols, widths):
             tree.heading(col, text=col)
             tree.column(col, width=w, anchor='center')
@@ -892,7 +896,7 @@ class OCRApp:
                     tree.insert('', tk.END, iid=f'{date}_{mode}', tags=(tag,),
                                 values=(date if first else '', lbl,
                                         s.get('success',0), s.get('cached',0),
-                                        s.get('failed',0), s.get('lines',0)))
+                                        s.get('failed',0)))
                     first = False
 
         def on_select(e):
@@ -967,10 +971,13 @@ class OCRApp:
             for mode, tag in [('accurate','accurate'),('basic','basic'),('general','general')]:
                 s = d[mode]
                 lbl = {'accurate':'高精度','basic':'快速','general':'通用'}[mode]
-                api_success = max(s['success'] - s['cached'], 0)
+                if self.stats_count_cache_as_success:
+                    api_success = max(s['success'] - s['cached'], 0)
+                else:
+                    api_success = s['success']
                 tree.insert('', tk.END, tags=(tag,),
                             values=(month if first else '', days if first else '',
-                                    lbl, s['success'], s['cached'],
+                                    lbl, api_success, s['cached'],
                                     f"{api_success/days:.1f}",
                                     f"{s['cached']/days:.1f}"))
                 first = False
