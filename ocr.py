@@ -1,5 +1,6 @@
 import requests
 import os
+import sys
 import base64
 import tkinter as tk
 from tkinter import filedialog, scrolledtext, messagebox, simpledialog, Menu, ttk
@@ -14,6 +15,12 @@ import re
 import random
 import copy
 import hashlib
+
+# 强制 stdout 使用 UTF-8 编码，解决 Windows GBK 控制台下 Unicode 字符崩溃问题
+try:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    pass
 
 plt = None
 FigureCanvasTkAgg = None
@@ -297,7 +304,8 @@ class DataStore:
             'ocr_cache': {},
             'size_limits': {},
             'font_config': {'font_size': 11},
-            'popup_windows': {}
+            'popup_windows': {},
+            'merge_save_path': ''
         }
         self.load()
 
@@ -400,6 +408,9 @@ class OCRApp:
         # 尺寸限制解锁状态
         self.size_limit_unlocked = False
         self.unlock_password = "000"  # 设置密码
+
+        # 拼接图片保存路径
+        self.merge_save_path = self.store.get('merge_save_path', '')
         
         # 图片尺寸限制配置（可自定义）- 使用范围限制
         self.size_limits = {
@@ -728,9 +739,11 @@ class OCRApp:
             frame.pack_forget()
         if name in self._nav_pages:
             self._nav_pages[name].pack(fill=tk.BOTH, expand=True)
-        # 切换到历史页时自动刷新表格
+        # 切换到历史页/统计页时自动刷新表格
         if name == '历史' and hasattr(self._page_history, '_refresh'):
             self._page_history._refresh()
+        if name == '统计' and hasattr(self._page_stats, '_refresh'):
+            self._page_stats._refresh()
 
     def _nav_home(self):
         self._nav_to('OCR识别')
@@ -777,6 +790,7 @@ class OCRApp:
             self._render_monthly_stats(tab_monthly)
 
         _reload()
+        self._page_stats._refresh = _reload
 
     def _render_total_stats(self, parent):
         """渲染总计统计"""
@@ -802,7 +816,8 @@ class OCRApp:
 
         total_days = len(self.stats)
         total_months = len(monthly) or 1
-        success_col = '成功(含缓存)' if self.stats_count_cache_as_success else '接口成功'
+        success_col = '🔌 接口成功' if not self.stats_count_cache_as_success else '✅ 成功(含缓存)'
+        cache_col  = '📦 缓存复用'
 
         # 汇总卡片
         cards = tk.Frame(parent, bg=BG)
@@ -810,7 +825,7 @@ class OCRApp:
         total_cached = sum(totals[m]['cached'] for m in totals)
         for label, val in [('使用天数', f'{total_days} 天'),
                             ('使用月数', f'{total_months} 月'),
-                            ('缓存复用', f'{total_cached} 次')]:
+                            ('📦 缓存复用', f'{total_cached} 次')]:
             card = tk.Frame(cards, bg='#F0F7FF', highlightthickness=1,
                             highlightbackground='#BFDBFE')
             card.pack(side=tk.LEFT, padx=(0, 12), pady=4, ipadx=18, ipady=12)
@@ -828,7 +843,7 @@ class OCRApp:
             s = totals[mode]
             days = total_days or 1
 
-            # 计算每月日均接口成功（不含缓存）
+            # 计算每月 🔌日均接口成功（不含 📦缓存）
             month_daily_avgs = []
             for month, mdata in monthly.items():
                 month_days = sum(1 for d in self.stats if d[:7] == month) or 1
@@ -845,15 +860,17 @@ class OCRApp:
             sec.pack(fill=tk.X, padx=16, pady=(0, 8), ipadx=10, ipady=8)
             tk.Label(sec, text=f'【{title}】', bg=bg_c, fg='#374151',
                      font=('Microsoft YaHei', 10, 'bold')).pack(anchor='w', padx=8, pady=(6, 2))
-            info = (f"{success_col}：{s['success']} 张   缓存复用：{s['cached']} 张   "
-                    f"月均日接口成功：{avg_per_day:.1f} 张/天")
+            info = (f"{success_col}：{s['success']} 张   "
+                    f"{cache_col}：{s['cached']} 张   "
+                    f"📊 月均日接口：{avg_per_day:.1f} 张/天")
             tk.Label(sec, text=info, bg=bg_c, fg='#374151',
                      font=('Microsoft YaHei', 9)).pack(anchor='w', padx=8, pady=(0, 6))
 
     def _render_daily_stats(self, parent):
         """渲染按日统计表格"""
-        success_col = '成功(含缓存)' if self.stats_count_cache_as_success else '接口成功'
-        cols = ('日期', '类型', success_col, '缓存', '失败')
+        success_col = '🔌 接口成功' if not self.stats_count_cache_as_success else '✅ 成功(含缓存)'
+        cache_col  = '📦 缓存复用'
+        cols = ('日期', '类型', success_col, cache_col, '失败')
 
         frame = tk.Frame(parent, bg='white')
         frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
@@ -868,13 +885,20 @@ class OCRApp:
                  font=('Microsoft YaHei', 9), relief='flat',
                  highlightthickness=1, highlightbackground='#DDE3EA').pack(
                      side=tk.LEFT, padx=(4, 8), ipady=3)
+        tk.Label(ctrl, text='密码：', bg='white',
+                 font=('Microsoft YaHei', 9)).pack(side=tk.LEFT)
+        pwd_var = tk.StringVar()
+        tk.Entry(ctrl, textvariable=pwd_var, width=10, show='*',
+                 font=('Microsoft YaHei', 9), relief='flat',
+                 highlightthickness=1, highlightbackground='#DDE3EA').pack(
+                     side=tk.LEFT, padx=(4, 8), ipady=3)
 
         vsb = ttk.Scrollbar(frame, orient=tk.VERTICAL)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         tree = ttk.Treeview(frame, columns=cols, show='headings',
                             yscrollcommand=vsb.set)
         vsb.config(command=tree.yview)
-        widths = [120, 70, 90, 65, 55]
+        widths = [120, 70, 120, 90, 55]
         for col, w in zip(cols, widths):
             tree.heading(col, text=col)
             tree.column(col, width=w, anchor='center')
@@ -912,12 +936,16 @@ class OCRApp:
             if not found:
                 messagebox.showwarning('提示', '未找到对应日期的统计记录')
                 return
-            if not self.verify_admin_password(title='删除统计记录',
-                                              message=f'删除 {", ".join(found)} 的统计？'):
+            # 校验内联密码输入框
+            if pwd_var.get().strip() != self.unlock_password:
+                messagebox.showerror('错误', '密码错误！')
+                return
+            if not messagebox.askyesno('确认', f'删除 {", ".join(found)} 的统计？'):
                 return
             for d in found:
                 del self.stats[d]
             self.save_stats()
+            pwd_var.set('')
             _fill()
 
         tree.bind('<<TreeviewSelect>>', on_select)
@@ -929,8 +957,9 @@ class OCRApp:
 
     def _render_monthly_stats(self, parent):
         """渲染按月统计表格"""
-        success_col = '成功(含缓存)' if self.stats_count_cache_as_success else '接口成功'
-        cols = ('月份', '天数', '类型', success_col, '缓存', '日均接口成功', '日均缓存')
+        success_col = '🔌 接口成功' if not self.stats_count_cache_as_success else '✅ 成功(含缓存)'
+        cache_col  = '📦 缓存复用'
+        cols = ('月份', '天数', '类型', success_col, cache_col, '📊 日均接口', '📊 日均缓存')
 
         frame = tk.Frame(parent, bg='white')
         frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
@@ -939,7 +968,7 @@ class OCRApp:
         tree = ttk.Treeview(frame, columns=cols, show='headings',
                             yscrollcommand=vsb.set)
         vsb.config(command=tree.yview)
-        widths = [90, 55, 65, 90, 65, 80, 80]
+        widths = [90, 55, 65, 110, 90, 80, 80]
         for col, w in zip(cols, widths):
             tree.heading(col, text=col)
             tree.column(col, width=w, anchor='center')
@@ -1360,7 +1389,6 @@ class OCRApp:
         self._build_left_ocr_panel(PANEL_BG, BORDER, BLUE)
         self.setup_plot_placeholder()
         self.setup_results_tab()
-        self._setup_drag_drop()
         self.image_paths = []
         self.all_results = []
 
@@ -1448,10 +1476,8 @@ class OCRApp:
 
         # ── 2. 识别设置 ──
         mode_card = card(left_panel, '2. 识别设置')
-        tk.Label(mode_card, text='识别模式', bg='white', fg='#6B7280',
-                 font=('Microsoft YaHei', 8)).pack(anchor='w', padx=12, pady=(8, 4))
         mode_row = tk.Frame(mode_card, bg='white')
-        mode_row.pack(fill=tk.X, padx=12, pady=(0, 10))
+        mode_row.pack(fill=tk.X, padx=12, pady=(8, 10))
 
         self._selected_ocr_mode = tk.StringVar(value='accurate')
 
@@ -6899,11 +6925,11 @@ class OCRApp:
         preview_h = max(1, int(max_height * scale))
 
         win_w = max(preview_w + 40, 720)
-        win_h = preview_h + 190
+        win_h = preview_h + 230
         x = (screen_w - win_w) // 2
         y = (screen_h - win_h) // 2
         preview_dialog.geometry(f"{win_w}x{win_h}+{x}+{y}")
-        preview_dialog.minsize(720, 320)
+        preview_dialog.minsize(720, 380)
 
         tk.Label(preview_dialog, text="拼接预览",
                  font=("Microsoft YaHei", 13, "bold")).pack(pady=(12, 4))
@@ -6915,6 +6941,23 @@ class OCRApp:
 
         order_label = tk.Label(preview_dialog, fg="#E65100", font=("Microsoft YaHei", 9))
         order_label.pack(pady=(4, 0))
+
+        # ── 保存路径设置 ──
+        path_row = tk.Frame(preview_dialog)
+        path_row.pack(pady=(8, 0))
+        tk.Label(path_row, text="📁 保存目录：", fg="#374151",
+                 font=("Microsoft YaHei", 9)).pack(side=tk.LEFT)
+        path_text = self.merge_save_path if self.merge_save_path else '未设置（点击右侧按钮设置）'
+        path_display = tk.Label(path_row, text=path_text,
+                                fg='#2563EB' if self.merge_save_path else '#9CA3AF',
+                                font=("Microsoft YaHei", 8), anchor='w', width=38)
+        path_display.pack(side=tk.LEFT)
+        tk.Button(path_row, text='设置', command=lambda: self._set_merge_save_path(path_display),
+                  bg='#E5E7EB', relief='flat', font=("Microsoft YaHei", 8),
+                  padx=8, cursor='hand2').pack(side=tk.LEFT, padx=(6, 2))
+        tk.Button(path_row, text='✕', command=lambda: self._clear_merge_save_path(path_display),
+                  bg='#E5E7EB', fg='#EF4444', relief='flat', font=("Microsoft YaHei", 8),
+                  padx=6, cursor='hand2').pack(side=tk.LEFT)
 
         img_label = tk.Label(preview_dialog, relief=tk.SUNKEN, bd=1)
         img_label.pack(pady=10, padx=20)
@@ -6957,9 +7000,6 @@ class OCRApp:
         tk.Button(btn_frame, text="💾 保存并识别", command=lambda: choose('save'),
                   bg="#4CAF50", fg="white", font=("Microsoft YaHei", 10),
                   padx=18, pady=8).pack(side=tk.LEFT, padx=6)
-        tk.Button(btn_frame, text="🔍 直接识别", command=lambda: choose('no_save'),
-                  bg="#2196F3", fg="white", font=("Microsoft YaHei", 10),
-                  padx=18, pady=8).pack(side=tk.LEFT, padx=6)
         tk.Button(btn_frame, text="取消", command=lambda: choose('cancel'),
                   bg="#757575", fg="white", font=("Microsoft YaHei", 10),
                   padx=18, pady=8).pack(side=tk.LEFT, padx=6)
@@ -6984,44 +7024,25 @@ class OCRApp:
 
             if preview_choice == 'cancel':
                 return
-            
-            # 保存到临时文件
-            import tempfile
-            temp_dir = tempfile.gettempdir()
-            temp_path = os.path.join(temp_dir, "merged_temp.jpg")
-            merged_image.save(temp_path, format='JPEG', quality=90)
-            
-            # 如果选择保存
-            if preview_choice == 'save':
-                save_path = filedialog.asksaveasfilename(
-                    defaultextension=".jpg",
-                    filetypes=[("JPEG图片", "*.jpg"), ("PNG图片", "*.png"), ("所有文件", "*.*")],
-                    initialfile=f"merged_{len(images)}images_{total_width}x{max_height}.jpg"
-                )
-                
-                if save_path:
-                    if save_path.lower().endswith('.png'):
-                        merged_image.save(save_path, format='PNG')
-                    else:
-                        merged_image.save(save_path, format='JPEG', quality=95)
-                    
-                    self.progress_label.config(
-                        text=f"✓ 拼接图片已保存到：{os.path.basename(save_path)}")
-                    temp_path = save_path
-            
-            # 继续识别流程
-            if preview_choice in ('save', 'no_save'):
-                self.image_paths = [temp_path]
-                self.file_label.config(
-                    text=f"已选择: 拼接图片 ({len(images)}张) - {total_width}x{max_height}", 
-                    fg="blue")
-                
-                # 直接使用高精度识别
-                self.root.after(500, self.perform_ocr)
-        
+
+            save_path = self._save_merged_image(merged_image, len(images), total_width, max_height)
+            if not save_path:
+                return  # 用户取消保存
+
+            self.progress_label.config(
+                text=f"✓ 拼接图片已保存到：{os.path.basename(save_path)}")
+
+            self.image_paths = [save_path]
+            self.file_label.config(
+                text=f"已选择: 拼接图片 ({len(images)}张) - {total_width}x{max_height}",
+                fg="blue")
+
+            # 直接使用高精度识别
+            self.root.after(500, self.perform_ocr)
+
         except Exception as e:
             messagebox.showerror("错误", f"拼接失败：{str(e)}")
-    
+
     def _create_ribbon_group(self, parent, title):
         """创建Ribbon功能组"""
         group_frame = tk.Frame(parent, bg="#f0f0f0", relief=tk.FLAT, bd=0)
@@ -7473,16 +7494,22 @@ class OCRApp:
     def append_cached_ocr_result(self, image_path, cached_result):
         cached_from = cached_result.get('cached_from') or cached_result.get('file', '')
         if cached_from and cached_from != os.path.basename(image_path):
-            note = f"命中已识别图片缓存，复用结果（来源: {cached_from}）\n"
+            detail = f"（来源: {cached_from}）"
         else:
-            note = "命中已识别图片缓存，复用结果\n"
+            detail = ""
+        note = (
+            "\n  ╔══════════════════════════════════════╗\n"
+            "  ║  📦 缓存命中 — 跳过接口调用，复用历史识别结果\n"
+            f"  ║  {detail}\n"
+            "  ╚══════════════════════════════════════╝\n"
+        )
         self.root.after(0, lambda n=note: self.result_text.insert(tk.END, n))
         recognized_text = "\n".join(cached_result.get('lines', []))
         if recognized_text:
             self.root.after(0, lambda t=recognized_text: self.result_text.insert(tk.END, t + "\n"))
         self.all_results.append(cached_result)
         self.root.after(0, lambda c=cached_result.get('count', 0):
-            self.result_text.insert(tk.END, f"\n缓存复用成功：{c} 行文字\n"))
+            self.result_text.insert(tk.END, f"\n  📦 缓存复用完成：{c} 行文字\n"))
         self.root.after(0, lambda: self.result_text.see(tk.END))
 
     def perform_ocr(self):
@@ -7541,6 +7568,8 @@ class OCRApp:
                                     f"   当前尺寸: {w}x{h}\n"
                                     f"   要求：宽度({wr})且高度({hr})都要在范围内\n"
                                     f"   建议使用「快速识别」按钮或点击「解锁限制」\n"))
+                            self.root.after(0, lambda w=width, h=height:
+                                self.show_toast(f"❌ 识别失败：图片尺寸超出范围\n{w}x{h} 不符合高精度识别要求"))
                             
                             self.all_results.append({
                                 'file': os.path.basename(image_path),
@@ -7589,7 +7618,7 @@ class OCRApp:
                     self.save_ocr_cache(image_hash, 'accurate', image_path, formatted_lines)
                     
                     self.root.after(0, lambda c=len(formatted_lines): 
-                        self.result_text.insert(tk.END, f"\n✓ 识别成功：{c} 行文字\n"))
+                        self.result_text.insert(tk.END, f"\n  🔌 接口识别成功：{c} 行文字\n"))
                 else:
                     self.root.after(0, lambda r=result: 
                         self.result_text.insert(tk.END, f"✗ 识别失败：{r}\n"))
@@ -7638,9 +7667,11 @@ class OCRApp:
             self.root.after(0, self._update_ocr_btn_by_keys)
             self.root.after(0, lambda: self.select_btn.config(state=tk.NORMAL))
             
-            status_msg = f"✓ 高精度识别完成！总:{total} 成功:{success_count}"
+            status_msg = f" 高精度识别完成 | 总:{total}"
+            if api_success_count > 0:
+                status_msg += f"  🔌接口成功:{api_success_count}"
             if cached_count > 0:
-                status_msg += f" 缓存:{cached_count}"
+                status_msg += f"  📦缓存复用:{cached_count}"
             if skipped_count > 0:
                 status_msg += f" 跳过:{skipped_count}"
             if failed_count > 0:
@@ -7709,7 +7740,7 @@ class OCRApp:
                         })
                         self.save_ocr_cache(image_hash, 'general', image_path, formatted_lines)
                         self.root.after(0, lambda c=len(formatted_lines):
-                            self.result_text.insert(tk.END, f"\n✓ 识别成功：{c} 行文字\n"))
+                            self.result_text.insert(tk.END, f"\n  🔌 接口识别成功：{c} 行文字\n"))
                     else:
                         self.root.after(0, lambda r=result:
                             self.result_text.insert(tk.END, f"✗ 识别失败：{r}\n"))
@@ -7796,6 +7827,8 @@ class OCRApp:
                                 f"   当前尺寸: 宽{w} x 高{h}\n"
                                 f"   要求：宽度({wr})且高度({hr})都要在范围内\n"
                                 f"   建议使用其他识别模式\n"))
+                        self.root.after(0, lambda w=width, h=height:
+                            self.show_toast(f"❌ 识别失败：图片尺寸超出范围\n{w}x{h} 不符合通用识别要求"))
                         
                         self.all_results.append({
                             'file': os.path.basename(image_path),
@@ -7844,7 +7877,7 @@ class OCRApp:
                     self.save_ocr_cache(image_hash, 'general', image_path, formatted_lines)
                     
                     self.root.after(0, lambda c=len(formatted_lines): 
-                        self.result_text.insert(tk.END, f"\n✓ 识别成功：{c} 行文字\n"))
+                        self.result_text.insert(tk.END, f"\n  🔌 接口识别成功：{c} 行文字\n"))
                 else:
                     self.root.after(0, lambda r=result: 
                         self.result_text.insert(tk.END, f"✗ 识别失败：{r}\n"))
@@ -7888,9 +7921,11 @@ class OCRApp:
             self.root.after(0, self._update_ocr_btn_by_keys)
             self.root.after(0, lambda: self.select_btn.config(state=tk.NORMAL))
             
-            status_msg = f"✓ 通用识别完成！总:{total} 成功:{success_count}"
+            status_msg = f" 通用识别完成 | 总:{total}"
+            if api_success_count > 0:
+                status_msg += f"  🔌接口成功:{api_success_count}"
             if cached_count > 0:
-                status_msg += f" 缓存:{cached_count}"
+                status_msg += f"  📦缓存复用:{cached_count}"
             if skipped_count > 0:
                 status_msg += f" 跳过:{skipped_count}"
             if failed_count > 0:
@@ -7964,6 +7999,8 @@ class OCRApp:
                                 f"   当前尺寸: 宽{w} x 高{h}\n"
                                 f"   要求：宽度({wr})且高度({hr})都要在范围内\n"
                                 f"   建议使用「高精度识别」按钮\n"))
+                        self.root.after(0, lambda w=width, h=height:
+                            self.show_toast(f"❌ 识别失败：图片尺寸超出范围\n{w}x{h} 不符合快速识别要求"))
                         
                         self.all_results.append({
                             'file': os.path.basename(image_path),
@@ -8012,7 +8049,7 @@ class OCRApp:
                     self.save_ocr_cache(image_hash, 'basic', image_path, text_only_lines)
                     
                     self.root.after(0, lambda c=len(text_only_lines): 
-                        self.result_text.insert(tk.END, f"\n✓ 识别成功：{c} 行文字\n"))
+                        self.result_text.insert(tk.END, f"\n  🔌 接口识别成功：{c} 行文字\n"))
                 else:
                     self.root.after(0, lambda r=result: 
                         self.result_text.insert(tk.END, f"✗ 识别失败：{r}\n"))
@@ -8056,9 +8093,11 @@ class OCRApp:
             self.root.after(0, self._update_ocr_btn_by_keys)
             self.root.after(0, lambda: self.select_btn.config(state=tk.NORMAL))
             
-            status_msg = f"✓ 快速识别完成！总:{total} 成功:{success_count}"
+            status_msg = f" 快速识别完成 | 总:{total}"
+            if api_success_count > 0:
+                status_msg += f"  🔌接口成功:{api_success_count}"
             if cached_count > 0:
-                status_msg += f" 缓存:{cached_count}"
+                status_msg += f"  📦缓存复用:{cached_count}"
             if skipped_count > 0:
                 status_msg += f" 跳过:{skipped_count}"
             if failed_count > 0:
@@ -8269,13 +8308,13 @@ class OCRApp:
                 else:
                     self.root.geometry(f"{width}x{height}")
                 
-                print(f"✓ 已加载窗口配置：{width}x{height}")
+                print(f"[OK] 已加载窗口配置：{width}x{height}")
             else:
                 # 默认尺寸
                 self.root.geometry("1300x900")
-                print("✓ 使用默认窗口尺寸")
+                print("[OK] 使用默认窗口尺寸")
         except Exception as e:
-            print(f"⚠️ 加载窗口配置失败: {e}")
+            print(f"[WARN] 加载窗口配置失败: {e}")
             self.root.geometry("1300x900")
     
     def save_window_config(self):
@@ -8558,6 +8597,21 @@ class OCRApp:
                 }
                 history_item['files'].append(file_info)
                 print(f"  - {result['file']}: {result['count']} 行")
+
+            # 检查是否与上一条记录重复（拼接后自动识别 + 手动再点的场景）
+            if self.history_data:
+                last = self.history_data[0]
+                if (last.get('type') == ocr_type
+                        and last.get('file_count') == history_item['file_count']
+                        and last.get('total_lines') == history_item['total_lines']
+                        and last.get('book_name') == book_name
+                        and last.get('page_no') == history_item['page_no']):
+                    # 进一步比较文件名列表
+                    last_files = [(f['name'], f['lines']) for f in last.get('files', [])]
+                    new_files  = [(f['name'], f['lines']) for f in history_item['files']]
+                    if last_files == new_files:
+                        print("⚠️ 与上一条历史记录相同，跳过重复保存")
+                        return
 
             # 添加到历史记录列表开头
             self.history_data.insert(0, history_item)
@@ -9494,6 +9548,9 @@ class OCRApp:
                    cached_count=0, cached_lines=0, api_lines=None, processed_count=None):
         """记录识别统计"""
         today = datetime.now().strftime("%Y-%m-%d")
+        print(f"[STATS] record_ocr: type={ocr_type} today={today} success={success_count} "
+              f"failed={failed_count} lines={lines} cached={cached_count} "
+              f"cached_lines={cached_lines} api_lines={api_lines} processed={processed_count}")
         
         if today not in self.stats:
             self.stats[today] = {
@@ -10108,17 +10165,18 @@ class OCRApp:
         total_all_success = sum(totals[mode]['success'] for mode in totals)
         total_all_cached = sum(totals[mode]['cached'] for mode in totals)
         total_all_lines = sum(totals[mode]['lines'] for mode in totals)
-        success_label = "成功(含缓存)" if self.stats_count_cache_as_success else "接口成功"
-        
+        success_label = "✅ 成功(含缓存)" if self.stats_count_cache_as_success else "🔌 接口成功"
+        cache_label   = "📦 缓存复用"
+
         total_info = f"""
 使用天数: {total_days} 天
-当前口径: 缓存复用{'计入' if self.stats_count_cache_as_success else '不计入'}成功统计
+当前口径: 📦缓存复用{'计入' if self.stats_count_cache_as_success else '不计入'}🔌接口成功统计
 
 【高精度识别】
   处理批次: {acc['count']} 次
   处理图片: {acc['processed']} 张
   {success_label}: {acc['success']} 张
-  缓存复用: {acc['cached']} 张
+  {cache_label}: {acc['cached']} 张
   输出行数: {acc['lines']} 行
   日平均处理: {acc['processed'] / total_days if total_days > 0 else 0:.1f} 张/天
 
@@ -10126,7 +10184,7 @@ class OCRApp:
   处理批次: {bas['count']} 次
   处理图片: {bas['processed']} 张
   {success_label}: {bas['success']} 张
-  缓存复用: {bas['cached']} 张
+  {cache_label}: {bas['cached']} 张
   输出行数: {bas['lines']} 行
   日平均处理: {bas['processed'] / total_days if total_days > 0 else 0:.1f} 张/天
 
@@ -10134,7 +10192,7 @@ class OCRApp:
   处理批次: {gen['count']} 次
   处理图片: {gen['processed']} 张
   {success_label}: {gen['success']} 张
-  缓存复用: {gen['cached']} 张
+  {cache_label}: {gen['cached']} 张
   输出行数: {gen['lines']} 行
   日平均处理: {gen['processed'] / total_days if total_days > 0 else 0:.1f} 张/天
 
@@ -10142,7 +10200,7 @@ class OCRApp:
   总处理批次: {total_all_count} 次
   总处理图片: {total_all_processed} 张
   总{success_label}: {total_all_success} 张
-  总缓存复用: {total_all_cached} 张
+  总{cache_label}: {total_all_cached} 张
   总输出行数: {total_all_lines} 行
   日平均处理: {total_all_processed / total_days if total_days > 0 else 0:.1f} 张/天
         """
@@ -10162,18 +10220,19 @@ class OCRApp:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         # 创建表格
-        success_col = "成功(含缓存)" if self.stats_count_cache_as_success else "接口成功"
-        columns = ("日期", "类型", "批次", "处理", success_col, "缓存复用", "失败", "行数")
-        tree = ttk.Treeview(table_frame, columns=columns, show="headings", 
+        success_col = "✅ 成功(含缓存)" if self.stats_count_cache_as_success else "🔌 接口成功"
+        cache_col   = "📦 缓存复用"
+        columns = ("日期", "类型", "批次", "处理", success_col, cache_col, "失败", "行数")
+        tree = ttk.Treeview(table_frame, columns=columns, show="headings",
                            yscrollcommand=scrollbar.set, height=25, selectmode="extended")
-        
+
         # 设置列标题
         tree.heading("日期", text="日期")
         tree.heading("类型", text="类型")
         tree.heading("批次", text="批次")
         tree.heading("处理", text="处理")
         tree.heading(success_col, text=success_col)
-        tree.heading("缓存复用", text="缓存复用")
+        tree.heading(cache_col, text=cache_col)
         tree.heading("失败", text="失败")
         tree.heading("行数", text="行数")
         
@@ -10182,8 +10241,8 @@ class OCRApp:
         tree.column("类型", width=100, anchor=tk.CENTER)
         tree.column("批次", width=70, anchor=tk.CENTER)
         tree.column("处理", width=70, anchor=tk.CENTER)
-        tree.column(success_col, width=110 if self.stats_count_cache_as_success else 90, anchor=tk.CENTER)
-        tree.column("缓存复用", width=90, anchor=tk.CENTER)
+        tree.column(success_col, width=120, anchor=tk.CENTER)
+        tree.column(cache_col, width=90, anchor=tk.CENTER)
         tree.column("失败", width=70, anchor=tk.CENTER)
         tree.column("行数", width=80, anchor=tk.CENTER)
         
@@ -10366,11 +10425,12 @@ class OCRApp:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         # 创建表格
-        success_col = "成功(含缓存)" if self.stats_count_cache_as_success else "接口成功"
-        columns = ("月份", "天数", "类型", "批次", "处理", success_col, "缓存复用", "行数", "日均")
-        tree = ttk.Treeview(table_frame, columns=columns, show="headings", 
+        success_col = "✅ 成功(含缓存)" if self.stats_count_cache_as_success else "🔌 接口成功"
+        cache_col   = "📦 缓存复用"
+        columns = ("月份", "天数", "类型", "批次", "处理", success_col, cache_col, "行数", "📊 日均接口")
+        tree = ttk.Treeview(table_frame, columns=columns, show="headings",
                            yscrollcommand=scrollbar.set, height=25)
-        
+
         # 设置列标题
         tree.heading("月份", text="月份")
         tree.heading("天数", text="天数")
@@ -10378,20 +10438,20 @@ class OCRApp:
         tree.heading("批次", text="批次")
         tree.heading("处理", text="处理")
         tree.heading(success_col, text=success_col)
-        tree.heading("缓存复用", text="缓存复用")
+        tree.heading(cache_col, text=cache_col)
         tree.heading("行数", text="行数")
-        tree.heading("日均", text="日均")
-        
+        tree.heading("📊 日均接口", text="📊 日均接口")
+
         # 设置列宽度和对齐方式
         tree.column("月份", width=120, anchor=tk.CENTER)
         tree.column("天数", width=80, anchor=tk.CENTER)
         tree.column("类型", width=100, anchor=tk.CENTER)
         tree.column("批次", width=70, anchor=tk.CENTER)
         tree.column("处理", width=70, anchor=tk.CENTER)
-        tree.column(success_col, width=110 if self.stats_count_cache_as_success else 90, anchor=tk.CENTER)
-        tree.column("缓存复用", width=90, anchor=tk.CENTER)
+        tree.column(success_col, width=120, anchor=tk.CENTER)
+        tree.column(cache_col, width=90, anchor=tk.CENTER)
         tree.column("行数", width=80, anchor=tk.CENTER)
-        tree.column("日均", width=100, anchor=tk.CENTER)
+        tree.column("📊 日均接口", width=100, anchor=tk.CENTER)
         
         # 配置滚动条
         scrollbar.config(command=tree.yview)
@@ -10493,6 +10553,46 @@ class OCRApp:
         except Exception as e:
             messagebox.showerror("错误", f"导出失败：{str(e)}")
     
+    def _set_merge_save_path(self, label_widget=None):
+        """设置拼接图片的默认保存目录，可选更新指定标签"""
+        path = filedialog.askdirectory(title='选择拼接图片保存目录')
+        if path:
+            self.merge_save_path = path
+            self.store.set('merge_save_path', path)
+            if label_widget:
+                label_widget.config(text=path, fg='#2563EB')
+
+    def _clear_merge_save_path(self, label_widget=None):
+        """清除拼接图片的默认保存目录，可选更新指定标签"""
+        self.merge_save_path = ''
+        self.store.set('merge_save_path', '')
+        if label_widget:
+            label_widget.config(text='未设置（点击设置）', fg='#6B7280')
+
+    def _save_merged_image(self, merged_image, image_count, total_width, max_height):
+        """根据是否设置了保存路径，直接保存或弹出对话框。返回保存路径或 None"""
+        if self.merge_save_path:
+            # 直接保存到预设目录
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f'merged_{image_count}images_{total_width}x{max_height}_{timestamp}.jpg'
+            save_path = os.path.join(self.merge_save_path, filename)
+            merged_image.save(save_path, format='JPEG', quality=95)
+            return save_path
+        else:
+            # 弹出保存对话框
+            save_path = filedialog.asksaveasfilename(
+                defaultextension=".jpg",
+                filetypes=[("JPEG图片", "*.jpg"), ("PNG图片", "*.png"), ("所有文件", "*.*")],
+                initialfile=f"merged_{image_count}images_{total_width}x{max_height}.jpg"
+            )
+            if not save_path:
+                return None
+            if save_path.lower().endswith('.png'):
+                merged_image.save(save_path, format='PNG')
+            else:
+                merged_image.save(save_path, format='JPEG', quality=95)
+            return save_path
+
     def merge_images(self):
         """拼接图片功能"""
         file_paths = filedialog.askopenfilenames(
@@ -10520,82 +10620,68 @@ class OCRApp:
 
             if preview_choice == 'cancel':
                 return
-            
-            # 保存到临时文件（用于识别）
-            import tempfile
-            temp_dir = tempfile.gettempdir()
-            temp_path = os.path.join(temp_dir, "merged_temp.jpg")
-            merged_image.save(temp_path, format='JPEG', quality=90)
-            
-            # 如果选择保存
-            if preview_choice == 'save':
-                save_path = filedialog.asksaveasfilename(
-                    defaultextension=".jpg",
-                    filetypes=[("JPEG图片", "*.jpg"), ("PNG图片", "*.png"), ("所有文件", "*.*")],
-                    initialfile=f"merged_{len(images)}images_{total_width}x{max_height}.jpg"
-                )
-                
-                if save_path:
-                    # 保存到用户指定位置
-                    if save_path.lower().endswith('.png'):
-                        merged_image.save(save_path, format='PNG')
-                    else:
-                        merged_image.save(save_path, format='JPEG', quality=95)
-                    
-                    self.progress_label.config(
-                        text=f"✓ 拼接图片已保存到：{os.path.basename(save_path)}")
-                    
-                    # 使用保存的文件进行识别
-                    temp_path = save_path
-            
-            # 继续识别流程
-            if preview_choice in ('save', 'no_save'):
-                self.image_paths = [temp_path]
-                self.file_label.config(
-                    text=f"已选择: 拼接图片 ({len(images)}张) - {total_width}x{max_height}", 
-                    fg="blue")
-                
-                # 检查尺寸并启用相应按钮（宽度和高度都在范围内）
-                width_in_accurate = self.size_limits["accurate_min_width"] <= total_width <= self.size_limits["accurate_max_width"]
-                height_in_accurate = self.size_limits["accurate_min_height"] <= max_height <= self.size_limits["accurate_max_height"]
-                meets_accurate = width_in_accurate and height_in_accurate
-                
-                width_in_basic = self.size_limits["basic_min_width"] <= total_width <= self.size_limits["basic_max_width"]
-                height_in_basic = self.size_limits["basic_min_height"] <= max_height <= self.size_limits["basic_max_height"]
-                meets_basic = width_in_basic and height_in_basic
-                
-                if meets_accurate and self._has_ocr_key('accurate'):
-                    self.ocr_btn.config(state=tk.NORMAL)
-                else:
-                    self.ocr_btn.config(state=tk.DISABLED)
-                
-                if meets_basic and self._has_ocr_key('basic'):
-                    self.quick_ocr_btn.config(state=tk.NORMAL)
-                else:
-                    self.quick_ocr_btn.config(state=tk.DISABLED)
-                
-                self.progress_label.config(text="")
-                
-                # 选择识别方式
-                if meets_accurate and meets_basic:
-                    ocr_choice = messagebox.askyesno("选择识别方式",
-                        f"是否使用高精度识别？\n\n"
-                        f"「是」= 高精度识别\n"
-                        f"「否」= 快速识别")
-                    if ocr_choice:
-                        self.root.after(500, self.perform_ocr)
-                    else:
-                        self.root.after(500, self.perform_quick_ocr)
-                elif meets_accurate:
+
+            save_path = self._save_merged_image(merged_image, len(images), total_width, max_height)
+            if not save_path:
+                return  # 用户取消保存
+
+            self.progress_label.config(
+                text=f"✓ 拼接图片已保存到：{os.path.basename(save_path)}")
+
+            self.image_paths = [save_path]
+            self.file_label.config(
+                text=f"已选择: 拼接图片 ({len(images)}张) - {total_width}x{max_height}",
+                fg="blue")
+
+            # 检查尺寸并启用相应按钮（宽度和高度都在范围内）
+            width_in_accurate = self.size_limits["accurate_min_width"] <= total_width <= self.size_limits["accurate_max_width"]
+            height_in_accurate = self.size_limits["accurate_min_height"] <= max_height <= self.size_limits["accurate_max_height"]
+            meets_accurate = width_in_accurate and height_in_accurate
+
+            width_in_basic = self.size_limits["basic_min_width"] <= total_width <= self.size_limits["basic_max_width"]
+            height_in_basic = self.size_limits["basic_min_height"] <= max_height <= self.size_limits["basic_max_height"]
+            meets_basic = width_in_basic and height_in_basic
+
+            if meets_accurate and self._has_ocr_key('accurate'):
+                self.ocr_btn.config(state=tk.NORMAL)
+            else:
+                self.ocr_btn.config(state=tk.DISABLED)
+
+            if meets_basic and self._has_ocr_key('basic'):
+                self.quick_ocr_btn.config(state=tk.NORMAL)
+            else:
+                self.quick_ocr_btn.config(state=tk.DISABLED)
+
+            self.progress_label.config(text="")
+
+            # 选择识别方式
+            if meets_accurate and meets_basic:
+                ocr_choice = messagebox.askyesno("选择识别方式",
+                    f"是否使用高精度识别？\n\n"
+                    f"「是」= 高精度识别\n"
+                    f"「否」= 快速识别")
+                if ocr_choice:
                     self.root.after(500, self.perform_ocr)
-                elif meets_basic:
-                    self.root.after(500, self.perform_quick_ocr)
                 else:
-                    messagebox.showwarning("警告", 
-                        f"拼接后的图片尺寸不符合任何识别要求\n\n"
+                    self.root.after(500, self.perform_quick_ocr)
+            elif meets_accurate:
+                self.root.after(500, self.perform_ocr)
+            elif meets_basic:
+                self.root.after(500, self.perform_quick_ocr)
+            else:
+                # 拼接图尺寸既不满足高精度也不满足快速：
+                # 回退到截图专用识别（通用识别，跳过尺寸限制），保证拼接图的文字一定能被识别出来
+                if self._has_ocr_key('general'):
+                    self.progress_label.config(
+                        text=f"拼接图尺寸({total_width}x{max_height})不在高精度/快速范围内，自动使用通用识别")
+                    self.root.after(500, self._perform_screenshot_ocr)
+                else:
+                    messagebox.showwarning("警告",
+                        f"拼接后的图片尺寸不符合高精度/快速识别要求，且未配置通用识别密钥\n\n"
                         f"当前尺寸: {total_width}x{max_height}\n"
                         f"高精度要求: 宽≥{self.size_limits['accurate_min_width']} 且 高≥{self.size_limits['accurate_min_height']}\n"
-                        f"快速识别要求: 宽<{self.size_limits['basic_max_width']} 且 高<{self.size_limits['basic_max_height']}")
+                        f"快速识别要求: 宽<{self.size_limits['basic_max_width']} 且 高<{self.size_limits['basic_max_height']}\n"
+                        f"请在「密钥」页配置通用识别密钥后重试")
         
         except Exception as e:
             messagebox.showerror("错误", f"拼接失败：{str(e)}")
