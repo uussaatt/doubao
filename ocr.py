@@ -547,7 +547,7 @@ class OCRApp:
 
         # ── 左侧导航栏 ──
         nav_bg = '#FFFFFF'
-        nav = tk.Frame(body, bg=nav_bg, width=130,
+        nav = tk.Frame(body, bg=nav_bg, width=148,
                        highlightthickness=1, highlightbackground='#E5E7EB')
         nav.pack(side=tk.LEFT, fill=tk.Y)
         nav.pack_propagate(False)
@@ -565,6 +565,7 @@ class OCRApp:
         self._page_unlock   = tk.Frame(self._content_area, bg='white')
         self._page_merge    = tk.Frame(self._content_area, bg='white')
         self._page_screenshot = tk.Frame(self._content_area, bg='white')
+        self._page_gallery    = tk.Frame(self._content_area, bg='white')
 
         # main_notebook 兼容旧代码（不实际显示）
         self.main_notebook = ttk.Notebook(self._content_area)
@@ -577,6 +578,7 @@ class OCRApp:
             '解锁':    self._page_unlock,
             '拼接预览': self._page_merge,
             '截图预览': self._page_screenshot,
+            '图片预览': self._page_gallery,
         }
 
         # ── 导航菜单项 ──
@@ -584,6 +586,7 @@ class OCRApp:
         nav_items = [
             ('🏠', '首页',    self._nav_home),
             ('▦',  'OCR识别', lambda: self._nav_to('OCR识别')),
+            ('🖼', '图片预览', lambda: self._nav_to('图片预览')),
             ('📊', '统计',    lambda: self._nav_to('统计')),
             ('📜', '历史',    lambda: self._nav_to('历史')),
             ('🔑', '密钥',    lambda: self._nav_to('密钥')),
@@ -600,16 +603,16 @@ class OCRApp:
             bar = tk.Frame(item, bg=nav_bg, width=3)
             bar.pack(side=tk.LEFT, fill=tk.Y)
 
-            # 图标+文字垂直排列
+            # 图标左 + 文字右 水平排列
             content = tk.Frame(item, bg=nav_bg)
-            content.pack(fill=tk.X, expand=True, padx=4, pady=6)
+            content.pack(fill=tk.X, expand=True, padx=10, pady=6)
 
             icon_lbl = tk.Label(content, text=icon, bg=nav_bg, fg='#9CA3AF',
-                                font=('Microsoft YaHei', 16))
-            icon_lbl.pack()
+                                font=('Microsoft YaHei', 13))
+            icon_lbl.pack(side=tk.LEFT, padx=(0, 6))
             text_lbl = tk.Label(content, text=label, bg=nav_bg, fg='#9CA3AF',
-                                font=('Microsoft YaHei', 8))
-            text_lbl.pack()
+                                font=('Microsoft YaHei', 9))
+            text_lbl.pack(side=tk.LEFT)
 
             def _on_enter(e, f=item, c=content, il=icon_lbl, tl=text_lbl):
                 active = getattr(self, '_active_nav', '')
@@ -671,7 +674,7 @@ class OCRApp:
                 for w in (item, content, icon_lbl, text_lbl):
                     w.config(bg=nav_bg)
                 icon_lbl.config(fg='#9CA3AF')
-                text_lbl.config(fg='#9CA3AF', font=('Microsoft YaHei', 8))
+                text_lbl.config(fg='#9CA3AF', font=('Microsoft YaHei', 9))
                 bar.config(bg=nav_bg)
             return
         for lbl, (item, icon_lbl, text_lbl, bar) in self._nav_buttons.items():
@@ -682,13 +685,13 @@ class OCRApp:
                 for w in (item, content, icon_lbl, text_lbl):
                     w.config(bg='#EFF6FF')
                 icon_lbl.config(fg='#1A6FD4')
-                text_lbl.config(fg='#1A6FD4', font=('Microsoft YaHei', 8, 'bold'))
+                text_lbl.config(fg='#1A6FD4', font=('Microsoft YaHei', 9, 'bold'))
                 bar.config(bg='#1A6FD4')
             else:
                 for w in (item, content, icon_lbl, text_lbl):
                     w.config(bg=nav_bg)
                 icon_lbl.config(fg='#9CA3AF')
-                text_lbl.config(fg='#9CA3AF', font=('Microsoft YaHei', 8))
+                text_lbl.config(fg='#9CA3AF', font=('Microsoft YaHei', 9))
                 bar.config(bg=nav_bg)
 
     def _show_import_dialog(self):
@@ -759,11 +762,13 @@ class OCRApp:
             frame.pack_forget()
         if name in self._nav_pages:
             self._nav_pages[name].pack(fill=tk.BOTH, expand=True)
-        # 切换到历史页/统计页时自动刷新表格
+        # 切换到历史页/统计页/图片预览时自动刷新
         if name == '历史' and hasattr(self._page_history, '_refresh'):
             self._page_history._refresh()
         if name == '统计' and hasattr(self._page_stats, '_refresh'):
             self._page_stats._refresh()
+        if name == '图片预览':
+            self._build_gallery_page()
 
     def _nav_home(self):
         self._nav_to('OCR识别')
@@ -1494,6 +1499,7 @@ class OCRApp:
                                         font=('Microsoft YaHei', 7), justify='left')
         self.size_hint_label.pack(anchor='w')
 
+
         # ── 2. 识别设置 ──
         mode_card = card(left_panel, '2. 识别设置')
         mode_row = tk.Frame(mode_card, bg='white')
@@ -1697,6 +1703,243 @@ class OCRApp:
                 messagebox.showerror('错误', '请先配置通用识别密钥！')
                 return
             self._run_ocr_with_callback(self._perform_general_ocr_thread, _after_ocr)
+
+
+    def _preview_full_image(self, image_path):
+        """在右侧工作区全幅显示原图，贴合可用空间"""
+        from PIL import ImageTk
+        try:
+            img = Image.open(image_path)
+        except Exception as e:
+            messagebox.showerror('错误', f'无法打开图片：{e}')
+            return
+
+        page = self._page_gallery
+        for c in page.winfo_children():
+            c.destroy()
+
+        page.configure(bg='#1a1a1a')
+
+        # 顶栏
+        top = tk.Frame(page, bg='#2d2d2d')
+        top.pack(fill=tk.X)
+        tk.Label(top,
+                 text=f'  {os.path.basename(image_path)}  |  {img.width}×{img.height} px',
+                 bg='#2d2d2d', fg='#ccc',
+                 font=('Microsoft YaHei', 10)).pack(side=tk.LEFT, padx=12, pady=8)
+        tk.Button(top, text='💾 下载', command=lambda: self._save_image_file(image_path),
+                  bg='#4CAF50', fg='white', font=('Microsoft YaHei', 9),
+                  padx=12, pady=4, cursor='hand2').pack(side=tk.RIGHT, padx=6, pady=6)
+        tk.Button(top, text='← 返回缩略图', command=self._build_gallery_page,
+                  bg='#EFF6FF', fg='#1A6FD4', font=('Microsoft YaHei', 9),
+                  padx=12, pady=4, cursor='hand2').pack(side=tk.RIGHT, padx=4, pady=6)
+
+        # 显示区域 — 用 Canvas 居中显示图片
+        canvas = tk.Canvas(page, bg='#1a1a1a', highlightthickness=0)
+        canvas.pack(fill=tk.BOTH, expand=True)
+
+        # 缩放比例标签
+        zoom_lbl = tk.Label(top, text='100%', bg='#2d2d2d', fg='#999',
+                            font=('Microsoft YaHei', 9))
+        zoom_lbl.pack(side=tk.RIGHT, padx=8, pady=8)
+
+        _img_ref = [img, None, None]  # [pil_image, PhotoImage, canvas_image_id]
+        _zoom = [1.0]
+
+        def _render():
+            page.update_idletasks()
+            cw = canvas.winfo_width() or 800
+            ch = canvas.winfo_height() or 600
+            avail_w = max(1, cw - 40)
+            avail_h = max(1, ch - 20)
+            s = min(1.0, avail_w / img.width, avail_h / img.height) * _zoom[0]
+            s = max(0.05, min(s, 10.0))
+            pw = max(1, int(img.width * s))
+            ph = max(1, int(img.height * s))
+            resized = img.resize((pw, ph), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(resized)
+            canvas.delete('all')
+            cid = canvas.create_image(cw // 2, ch // 2, image=photo, anchor='center')
+            _img_ref[1] = photo
+            _img_ref[2] = cid
+            zoom_lbl.config(text=f'{int(s * 100)}%' if s < 1 else f'{s:.1f}x')
+
+        # resize 延迟渲染，避免频繁触发
+        _resize_timer = [None]
+        def _on_resize_evt(e):
+            if e.widget == page:
+                if _resize_timer[0]:
+                    page.after_cancel(_resize_timer[0])
+                _resize_timer[0] = page.after(80, _render)
+
+        page.bind('<Configure>', _on_resize_evt)
+
+        # 滚轮缩放
+        def _on_wheel(e):
+            delta = 1.15 if e.delta > 0 else (1 / 1.15)
+            _zoom[0] *= delta
+            _zoom[0] = max(0.05, min(_zoom[0], 10.0))
+            _render()
+        canvas.bind('<MouseWheel>', _on_wheel)
+
+        # Ctrl + 滚轮缩放时保持中心点
+        page.after(150, _render)
+
+    def _save_image_file(self, image_path):
+        """保存原始图片到指定路径"""
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=os.path.splitext(image_path)[1] or '.jpg',
+            filetypes=[('JPEG 图片', '*.jpg'), ('PNG 图片', '*.png'),
+                       ('BMP 图片', '*.bmp'), ('所有文件', '*.*')],
+            initialfile=os.path.basename(image_path),
+            title='保存原始图片'
+        )
+        if save_path:
+            try:
+                import shutil
+                shutil.copy2(image_path, save_path)
+                self.show_temp_message(f'✓ 图片已保存：{os.path.basename(save_path)}')
+            except Exception as e:
+                messagebox.showerror('保存失败', f'保存图片时出错：{e}')
+
+    def _build_gallery_page(self):
+        """构建图片预览页——显示所有已识别图片的缩略图，自适应工作区宽度"""
+        page = self._page_gallery
+        for c in page.winfo_children():
+            c.destroy()
+
+        page.configure(bg='white')
+
+        header = tk.Frame(page, bg='white')
+        header.pack(fill=tk.X, padx=24, pady=(18, 8))
+        tk.Label(header, text='🖼 图片预览', bg='white', fg='#111827',
+                 font=('Microsoft YaHei', 14, 'bold')).pack(side=tk.LEFT)
+        tk.Button(header, text='🔄 刷新', command=self._build_gallery_page,
+                  bg='#EFF6FF', fg='#1A6FD4', relief='flat',
+                  font=('Microsoft YaHei', 9), padx=10, pady=4,
+                  cursor='hand2').pack(side=tk.RIGHT)
+
+        # 收集所有已处理的图片路径
+        seen = set()
+        img_paths = []
+        for r in (getattr(self, 'all_results', []) or []):
+            p = r.get('path', '')
+            if p and os.path.exists(p) and p not in seen:
+                seen.add(p)
+                img_paths.append(p)
+
+        if not img_paths:
+            empty = tk.Frame(page, bg='white')
+            empty.pack(fill=tk.BOTH, expand=True)
+            tk.Label(empty, text='暂无图片\n\n请先执行 OCR 识别',
+                     bg='white', fg='#9CA3AF',
+                     font=('Microsoft YaHei', 12)).pack(expand=True)
+            return
+
+        # 滚动容器
+        canvas = tk.Canvas(page, bg='white', highlightthickness=0)
+        vsb = tk.Scrollbar(page, orient=tk.VERTICAL, command=canvas.yview)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        canvas.configure(yscrollcommand=vsb.set)
+
+        inner = tk.Frame(canvas, bg='white')
+        win_id = canvas.create_window((0, 0), window=inner, anchor='nw', tags='inner')
+
+        # 内层宽度跟随 Canvas 宽度
+        def _on_canvas_configure(e):
+            canvas.itemconfig(win_id, width=e.width)
+        canvas.bind('<Configure>', _on_canvas_configure, add='+')
+
+        def _on_inner_configure(e):
+            canvas.configure(scrollregion=canvas.bbox('all'))
+        inner.bind('<Configure>', _on_inner_configure, add='+')
+
+        # 鼠标滚轮
+        def _on_mousewheel(e):
+            canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+        canvas.bind('<Enter>', lambda e: canvas.bind_all('<MouseWheel>', _on_mousewheel))
+        canvas.bind('<Leave>', lambda e: canvas.unbind_all('<MouseWheel>'))
+
+        from PIL import ImageTk
+
+        CARD_W = 200  # 卡片固定宽度
+        GAP = 8       # 卡片间距
+
+        # 布局函数：根据 inner 的实际宽度动态排列卡片
+        _gallery_state = {'row_frame': None, 'col': 0, 'cols': 1}
+
+        def _layout_gallery():
+            # 清空
+            for w in inner.winfo_children():
+                w.destroy()
+            _gallery_state['row_frame'] = None
+            _gallery_state['col'] = 0
+
+            iw = inner.winfo_width()
+            _gallery_state['cols'] = max(1, (iw - 4) // (CARD_W + GAP))
+
+            for path in img_paths:
+                col = _gallery_state['col']
+                if col % _gallery_state['cols'] == 0:
+                    rf = tk.Frame(inner, bg='white')
+                    rf.pack(fill=tk.X, padx=2, pady=(4, 0))
+                    _gallery_state['row_frame'] = rf
+                else:
+                    rf = _gallery_state['row_frame']
+
+                _gallery_state['col'] += 1
+
+                try:
+                    img = Image.open(path)
+                    pw, ph = img.size
+                    img.thumbnail((CARD_W - 10, CARD_W - 10))
+                    photo = ImageTk.PhotoImage(img)
+
+                    card = tk.Frame(rf, bg='white', relief='solid',
+                                    bd=1, highlightbackground='#E5E7EB')
+                    card.pack(side=tk.LEFT, padx=(0, GAP), pady=4)
+
+                    thumb = tk.Label(card, image=photo, bg='white', cursor='hand2')
+                    thumb.image = photo
+                    thumb.pack(padx=4, pady=(4, 0))
+
+                    name = os.path.basename(path)
+                    tk.Label(card, text=name, bg='white', fg='#374151',
+                             font=('Microsoft YaHei', 9)).pack(pady=(2, 0))
+                    tk.Label(card, text=f'{pw}×{ph} px', bg='white', fg='#9CA3AF',
+                             font=('Microsoft YaHei', 8)).pack(pady=(0, 2))
+
+                    btn_r = tk.Frame(card, bg='white')
+                    btn_r.pack(fill=tk.X, padx=4, pady=(0, 6))
+                    tk.Button(btn_r, text='🔍 查看',
+                              command=lambda p=path: self._preview_full_image(p),
+                              bg='#EFF6FF', fg='#1A6FD4', relief='flat',
+                              font=('Microsoft YaHei', 8), padx=8, pady=2,
+                              cursor='hand2').pack(side=tk.LEFT, padx=(0, 4))
+                    tk.Button(btn_r, text='💾 保存',
+                              command=lambda p=path: self._save_image_file(p),
+                              bg='#F0FDF4', fg='#16A34A', relief='flat',
+                              font=('Microsoft YaHei', 8), padx=8, pady=2,
+                              cursor='hand2').pack(side=tk.LEFT)
+
+                    thumb.bind('<Button-1>', lambda e, p=path: self._preview_full_image(p))
+
+                except Exception as e:
+                    print(f'图片加载失败: {path} {e}')
+
+        # 初始布局 & 窗口缩放时重排
+        def _delayed_layout():
+            inner.update_idletasks()
+            _layout_gallery()
+
+        inner.after(150, _delayed_layout)
+
+        # 窗口大小变化后重排
+        def _on_resize(e):
+            if e.widget == page and e.width > 50:
+                _delayed_layout()
+        page.bind('<Configure>', _on_resize, add='+')
 
     def _run_ocr_with_callback(self, thread_func, callback):
         """启动识别线程，完成后在主线程执行 callback"""
@@ -7805,7 +8048,7 @@ class OCRApp:
             self.root.after(0, lambda: self.add_zeros_btn.config(state=tk.NORMAL))
             self.root.after(0, self._update_ocr_btn_by_keys)
             self.root.after(0, lambda: self.select_btn.config(state=tk.NORMAL))
-            
+
             status_msg = f" 高精度识别完成 | 总:{total}"
             if api_success_count > 0:
                 status_msg += f"  🔌接口成功:{api_success_count}"
@@ -8059,7 +8302,7 @@ class OCRApp:
             self.root.after(0, lambda: self.add_zeros_btn.config(state=tk.NORMAL))
             self.root.after(0, self._update_ocr_btn_by_keys)
             self.root.after(0, lambda: self.select_btn.config(state=tk.NORMAL))
-            
+
             status_msg = f" 通用识别完成 | 总:{total}"
             if api_success_count > 0:
                 status_msg += f"  🔌接口成功:{api_success_count}"
@@ -8231,7 +8474,7 @@ class OCRApp:
             self.root.after(0, lambda: self.add_zeros_btn.config(state=tk.NORMAL))
             self.root.after(0, self._update_ocr_btn_by_keys)
             self.root.after(0, lambda: self.select_btn.config(state=tk.NORMAL))
-            
+
             status_msg = f" 快速识别完成 | 总:{total}"
             if api_success_count > 0:
                 status_msg += f"  🔌接口成功:{api_success_count}"
