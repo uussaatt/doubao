@@ -305,7 +305,8 @@ class DataStore:
             'size_limits': {},
             'font_config': {'font_size': 11},
             'popup_windows': {},
-            'merge_save_path': ''
+            'merge_save_path': '',
+            'preview_ocr_defaults': {'merge': 'accurate', 'crop': 'general', 'screenshot': 'general'}
         }
         self.load()
 
@@ -411,6 +412,10 @@ class OCRApp:
 
         # 拼接图片保存路径
         self.merge_save_path = self.store.get('merge_save_path', '')
+
+        # 预览页默认识别模式（各自独立保存）
+        self.preview_ocr_defaults = self.store.get('preview_ocr_defaults',
+            {'merge': 'accurate', 'crop': 'general', 'screenshot': 'general'})
         
         # 图片尺寸限制配置（可自定义）- 使用范围限制
         self.size_limits = {
@@ -6961,8 +6966,9 @@ class OCRApp:
 
         return merged_image, total_width, max_height
 
-    def _show_merged_image_preview(self, images, item_label="图片数量", item_action="选择"):
-        """在右侧区域显示拼接结果预览，通过回调返回结果。识别模式与侧边栏同步。"""
+    def _show_merged_image_preview(self, images, item_label="图片数量", item_action="选择",
+                                     preview_type='merge'):
+        """在右侧区域显示拼接结果预览。识别模式独立记忆（merge/crop/screenshot）。"""
         from PIL import ImageTk
 
         page = self._page_merge
@@ -7017,8 +7023,9 @@ class OCRApp:
         mode_row.pack(pady=(6, 0))
         tk.Label(mode_row, text='识别模式：', bg='white', fg='#374151',
                  font=('Microsoft YaHei', 9)).pack(side=tk.LEFT)
-        # 从侧边栏读取当前模式作为默认值
-        current_mode = self._selected_ocr_mode.get() if hasattr(self, '_selected_ocr_mode') else 'accurate'
+        # 从该预览类型的记忆模式读取，无记忆时回退到侧边栏当前模式
+        current_mode = self.preview_ocr_defaults.get(preview_type,
+            self._selected_ocr_mode.get() if hasattr(self, '_selected_ocr_mode') else 'accurate')
         selected_mode = [current_mode]
         mode_btns = {}
         for m, text in [('accurate', '高精度'), ('basic', '快速'), ('general', '通用')]:
@@ -7050,8 +7057,10 @@ class OCRApp:
                 else:
                     b.config(bg='white', fg='#374151', highlightthickness=1,
                              highlightbackground='#E5E7EB')
-            # 同步到侧边栏
+            # 同步到侧边栏，并记忆当前预览类型的模式
             self._sync_ocr_sidebar_mode(m)
+            self.preview_ocr_defaults[preview_type] = m
+            self.store.set('preview_ocr_defaults', self.preview_ocr_defaults)
 
         for m, b in mode_btns.items():
             b.config(command=lambda mm=m: select_mode(mm))
@@ -7167,7 +7176,7 @@ class OCRApp:
                 self._run_ocr_by_mode(ocr_mode)
 
             self._show_merged_image_preview(
-                images, item_label="图片数量", item_action="选择"
+                images, item_label="图片数量", item_action="选择", preview_type='merge'
             )(on_choice)
 
         except Exception as e:
@@ -10778,7 +10787,7 @@ class OCRApp:
                 self._run_ocr_by_mode(ocr_mode)
 
             self._show_merged_image_preview(
-                images, item_label="图片数量", item_action="选择"
+                images, item_label="图片数量", item_action="选择", preview_type='merge'
             )(on_choice)
         
         except Exception as e:
@@ -11064,7 +11073,9 @@ class OCRApp:
             mode_row.pack(pady=(0, 4))
             tk.Label(mode_row, text='识别模式：', bg='white', fg='#374151',
                      font=('Microsoft YaHei', 9)).pack(side=tk.LEFT)
-            shot_mode = [self._selected_ocr_mode.get() if hasattr(self, '_selected_ocr_mode') else 'general']
+            # 截图预览独立记忆模式
+            shot_mode = [self.preview_ocr_defaults.get('screenshot',
+                self._selected_ocr_mode.get() if hasattr(self, '_selected_ocr_mode') else 'general')]
             mode_btns_local = {}
             for m, text in [('accurate', '高精度'), ('basic', '快速'), ('general', '通用')]:
                 key = self._has_ocr_key(m)
@@ -11094,8 +11105,10 @@ class OCRApp:
                     else:
                         b.config(bg='white', fg='#374151', highlightthickness=1,
                                  highlightbackground='#E5E7EB')
-                # 同步到侧边栏
+                # 同步到侧边栏，并记忆截图预览的模式
                 self._sync_ocr_sidebar_mode(m)
+                self.preview_ocr_defaults['screenshot'] = m
+                self.store.set('preview_ocr_defaults', self.preview_ocr_defaults)
 
             for m, b in mode_btns_local.items():
                 b.config(command=lambda mm=m: select_shot_mode(mm))
@@ -11669,7 +11682,8 @@ class OCRApp:
                         self._run_ocr_by_mode(ocr_mode)
 
                     self._show_merged_image_preview(
-                        cropped_images, item_label="区域数量", item_action="框选"
+                        cropped_images, item_label="区域数量", item_action="框选",
+                        preview_type='crop'
                     )(on_crop_choice)
                 
                 except Exception as e:
