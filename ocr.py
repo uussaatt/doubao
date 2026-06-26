@@ -306,6 +306,7 @@ class DataStore:
             'font_config': {'font_size': 11},
             'popup_windows': {},
             'merge_save_path': '',
+            'export_save_path': '',
             'preview_ocr_defaults': {'merge': 'accurate', 'crop': 'general', 'screenshot': 'general'}
         }
         self.load()
@@ -412,6 +413,8 @@ class OCRApp:
 
         # 拼接图片保存路径
         self.merge_save_path = self.store.get('merge_save_path', '')
+        # 导出文件保存路径
+        self.export_save_path = self.store.get('export_save_path', '')
 
         # 预览页默认识别模式（各自独立保存）
         self.preview_ocr_defaults = self.store.get('preview_ocr_defaults',
@@ -518,7 +521,7 @@ class OCRApp:
 
         _title_btn(self.root.nametowidget(title_bar) if False else title_bar,
                    '?  帮助', lambda: messagebox.showinfo('帮助', '使用左侧导航切换功能页面'))
-        _title_btn(title_bar, '⚙  设置', self.show_api_key_settings)
+        _title_btn(title_bar, '⚙  设置', self.show_settings_panel)
         _title_btn(title_bar, '☆  主题', lambda: None)
 
         # 分隔线
@@ -638,16 +641,20 @@ class OCRApp:
 
             self._nav_buttons[label] = (item, icon_lbl, text_lbl, bar)
 
-        # 底部状态栏
-        status_bar = tk.Frame(nav, bg=nav_bg,
-                              highlightthickness=1, highlightbackground='#E5E7EB')
-        status_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=0)
-        self._status_dot = tk.Label(status_bar, text='●', bg=nav_bg, fg='#3B82F6',
-                                    font=('Arial', 9))
+        # 底部状态栏 — 整条变色，识别中/完成一目了然
+        self._status_bar = tk.Frame(nav, bg=nav_bg,
+                                    highlightthickness=1, highlightbackground='#E5E7EB')
+        self._status_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=0)
+        self._status_dot = tk.Label(self._status_bar, text='●', bg=nav_bg, fg='#3B82F6',
+                                    font=('Arial', 10))
         self._status_dot.pack(side=tk.LEFT, padx=(14, 4), pady=8)
-        self._status_text = tk.Label(status_bar, text='就绪', bg=nav_bg, fg='#9CA3AF',
-                 font=('Microsoft YaHei', 8))
-        self._status_text.pack(side=tk.LEFT)
+        self._status_text = tk.Label(self._status_bar, text='就绪', bg=nav_bg, fg='#6B7280',
+                                     font=('Microsoft YaHei', 9))
+        self._status_text.pack(side=tk.LEFT, pady=8)
+
+        # ── 主界面顶部识别状态横幅（全宽，醒目） ──
+        self._status_banner = tk.Frame(body, bg=nav_bg, height=0)
+        # 初始隐藏，识别时显示
 
         # 默认激活 OCR识别
         self._set_active_nav('OCR识别')
@@ -1487,9 +1494,10 @@ class OCRApp:
         self.progress_frame.pack(fill=tk.X, padx=10, pady=(4, 0))
         self.progress_label = tk.Label(self.progress_frame, text='',
                                        bg=BG, fg='#F59E0B',
-                                       font=('Microsoft YaHei', 7),
+                                       font=('Microsoft YaHei', 8),
                                        wraplength=190, justify='left')
         self.progress_label.pack(anchor='w')
+        self.progress_frame_row = self.progress_frame  # 方便后续改色
         acc_range = f"{self.size_limits['accurate_min_width']}~{self.size_limits['accurate_max_width']}x{self.size_limits['accurate_min_height']}~{self.size_limits['accurate_max_height']}"
         bas_range = f"{self.size_limits['basic_min_width']}~{self.size_limits['basic_max_width']}x{self.size_limits['basic_min_height']}~{self.size_limits['basic_max_height']}"
         gen_range = f"{self.size_limits['general_min_width']}~{self.size_limits['general_max_width']}x{self.size_limits['general_min_height']}~{self.size_limits['general_max_height']}"
@@ -1615,18 +1623,10 @@ class OCRApp:
                                   pady=11, cursor='hand2', state=tk.DISABLED)
         self.copy_btn.pack(fill=tk.X, padx=10, pady=(0, 6))
 
-        # 辅助按钮
-        aux_row = tk.Frame(left_panel, bg=BG)
-        aux_row.pack(fill=tk.X, padx=10)
-        for text, cmd in [('加|0|0', self.add_zeros_to_lines),
-                           ('导出',   self.export_results)]:
-            tk.Button(aux_row, text=text, command=cmd,
-                      bg='white', fg='#6B7280', relief='flat',
-                      highlightthickness=1, highlightbackground='#E5E7EB',
-                      font=('Microsoft YaHei', 8), padx=8, pady=4,
-                      cursor='hand2').pack(side=tk.LEFT, padx=(0, 6))
-        self.add_zeros_btn = aux_row.winfo_children()[0]
-        self.export_btn    = aux_row.winfo_children()[1]
+        # 辅助按钮变量（已移到右上角设置，此处保留引用以兼容旧代码）
+        self.add_zeros_btn = tk.Button(left_panel, state=tk.DISABLED)
+        self.export_btn    = tk.Button(left_panel, state=tk.DISABLED)
+        # 不 pack，仅兼容旧代码中的 state 设置引用
 
         self.text_input = tk.Text(left_panel, height=1, font=('Consolas', 10))
         # 不 pack，仅数据中转
@@ -1730,6 +1730,9 @@ class OCRApp:
         tk.Button(top, text='💾 下载', command=lambda: self._save_image_file(image_path),
                   bg='#4CAF50', fg='white', font=('Microsoft YaHei', 9),
                   padx=12, pady=4, cursor='hand2').pack(side=tk.RIGHT, padx=6, pady=6)
+        tk.Button(top, text='📌 弹出窗口', command=lambda: self._popout_image_window(image_path),
+                  bg='#1A6FD4', fg='white', font=('Microsoft YaHei', 9),
+                  padx=12, pady=4, cursor='hand2').pack(side=tk.RIGHT, padx=4, pady=6)
         tk.Button(top, text='← 返回缩略图', command=self._build_gallery_page,
                   bg='#EFF6FF', fg='#1A6FD4', font=('Microsoft YaHei', 9),
                   padx=12, pady=4, cursor='hand2').pack(side=tk.RIGHT, padx=4, pady=6)
@@ -1738,10 +1741,26 @@ class OCRApp:
         canvas = tk.Canvas(page, bg='#1a1a1a', highlightthickness=0)
         canvas.pack(fill=tk.BOTH, expand=True)
 
-        # 缩放比例标签
-        zoom_lbl = tk.Label(top, text='100%', bg='#2d2d2d', fg='#999',
-                            font=('Microsoft YaHei', 9))
-        zoom_lbl.pack(side=tk.RIGHT, padx=8, pady=8)
+        # 缩放比例标签 + 缩放按钮
+        zoom_frame = tk.Frame(top, bg='#2d2d2d')
+        zoom_frame.pack(side=tk.RIGHT, padx=8, pady=4)
+
+        tk.Button(zoom_frame, text='−', command=lambda: _do_zoom(1/1.3),
+                  bg='#444', fg='white', font=('Arial', 10, 'bold'),
+                  relief='flat', padx=6, pady=0, cursor='hand2',
+                  width=2).pack(side=tk.LEFT)
+        tk.Button(zoom_frame, text='＋', command=lambda: _do_zoom(1.3),
+                  bg='#444', fg='white', font=('Arial', 10, 'bold'),
+                  relief='flat', padx=6, pady=0, cursor='hand2',
+                  width=2).pack(side=tk.LEFT, padx=(2, 0))
+        tk.Button(zoom_frame, text='⊡', command=lambda: _do_zoom(0),
+                  bg='#444', fg='white', font=('Arial', 9, 'bold'),
+                  relief='flat', padx=6, pady=0, cursor='hand2',
+                  width=2).pack(side=tk.LEFT, padx=(2, 0))
+
+        zoom_lbl = tk.Label(zoom_frame, text='100%', bg='#2d2d2d', fg='#ccc',
+                            font=('Microsoft YaHei', 9), width=6, anchor='e')
+        zoom_lbl.pack(side=tk.LEFT, padx=(4, 0))
 
         _img_ref = [img, None, None]  # [pil_image, PhotoImage, canvas_image_id]
         _zoom = [1.0]
@@ -1774,16 +1793,94 @@ class OCRApp:
 
         page.bind('<Configure>', _on_resize_evt)
 
+        # 缩放操作（通过按钮或滚轮）
+        def _do_zoom(factor):
+            if factor == 0:
+                _zoom[0] = 1.0  # 恢复原始大小
+            else:
+                _zoom[0] *= factor
+                _zoom[0] = max(0.05, min(_zoom[0], 10.0))
+            _render()
+
         # 滚轮缩放
         def _on_wheel(e):
             delta = 1.15 if e.delta > 0 else (1 / 1.15)
-            _zoom[0] *= delta
-            _zoom[0] = max(0.05, min(_zoom[0], 10.0))
-            _render()
+            _do_zoom(delta)
         canvas.bind('<MouseWheel>', _on_wheel)
 
         # Ctrl + 滚轮缩放时保持中心点
         page.after(150, _render)
+
+    def _popout_image_window(self, image_path):
+        """弹出置顶窗口查看原图，始终在所有窗口最前面"""
+        from PIL import ImageTk
+        try:
+            img = Image.open(image_path)
+        except Exception as e:
+            messagebox.showerror('错误', f'无法打开图片：{e}')
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title(f'图片预览 - {os.path.basename(image_path)}')
+        win.attributes('-topmost', True)
+        win.transient(self.root)
+
+        sw = win.winfo_screenwidth()
+        sh = win.winfo_screenheight()
+        max_w = int(sw * 0.85)
+        max_h = int(sh * 0.85)
+        scale = min(1.0, max_w / img.width, max_h / img.height)
+        dw = max(1, int(img.width * scale))
+        dh = max(1, int(img.height * scale))
+        win.geometry(f'{dw + 20}x{dh + 80}+{(sw - dw) // 2}+{(sh - dh) // 2}')
+
+        # 顶栏
+        top = tk.Frame(win, bg='#2d2d2d')
+        top.pack(fill=tk.X)
+        tk.Label(top, text=f'  {os.path.basename(image_path)}  |  {img.width}×{img.height} px',
+                 bg='#2d2d2d', fg='#ccc', font=('Microsoft YaHei', 10)).pack(
+                     side=tk.LEFT, padx=12, pady=8)
+
+        zoom_lbl = tk.Label(top, text='100%', bg='#2d2d2d', fg='#999',
+                            font=('Microsoft YaHei', 9))
+        zoom_lbl.pack(side=tk.RIGHT, padx=8, pady=8)
+
+        _zoom = [scale]
+
+        disp = img.resize((dw, dh), Image.Resampling.LANCZOS)
+        photo = ImageTk.PhotoImage(disp)
+        lbl = tk.Label(win, image=photo, bg='black')
+        lbl.image = photo
+        lbl.pack(padx=10, pady=(0, 8))
+
+        def _rescale(new_scale):
+            new_scale = max(0.05, min(new_scale, 10.0))
+            _zoom[0] = new_scale
+            nw = max(1, int(img.width * new_scale))
+            nh = max(1, int(img.height * new_scale))
+            resized = img.resize((nw, nh), Image.Resampling.LANCZOS)
+            np = ImageTk.PhotoImage(resized)
+            lbl.config(image=np)
+            lbl.image = np
+            zoom_lbl.config(text=f'{int(new_scale * 100)}%' if new_scale < 1 else f'{new_scale:.1f}x')
+
+        def _on_wheel(e):
+            delta = 1.15 if e.delta > 0 else (1 / 1.15)
+            _rescale(_zoom[0] * delta)
+        lbl.bind('<MouseWheel>', _on_wheel)
+        win.bind('<MouseWheel>', _on_wheel)
+
+        btn_row = tk.Frame(win)
+        btn_row.pack(pady=(0, 8))
+        tk.Button(btn_row, text='💾 保存图片',
+                  command=lambda: self._save_image_file(image_path),
+                  bg='#4CAF50', fg='white', font=('Microsoft YaHei', 10),
+                  padx=16, pady=5, cursor='hand2').pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_row, text='关闭', command=win.destroy,
+                  bg='#757575', fg='white', font=('Microsoft YaHei', 10),
+                  padx=16, pady=5, cursor='hand2').pack(side=tk.LEFT, padx=4)
+
+        win.bind('<Escape>', lambda e: win.destroy())
 
     def _save_image_file(self, image_path):
         """保存原始图片到指定路径"""
@@ -1915,12 +2012,17 @@ class OCRApp:
                     tk.Button(btn_r, text='🔍 查看',
                               command=lambda p=path: self._preview_full_image(p),
                               bg='#EFF6FF', fg='#1A6FD4', relief='flat',
-                              font=('Microsoft YaHei', 8), padx=8, pady=2,
-                              cursor='hand2').pack(side=tk.LEFT, padx=(0, 4))
+                              font=('Microsoft YaHei', 8), padx=6, pady=2,
+                              cursor='hand2').pack(side=tk.LEFT, padx=(0, 2))
+                    tk.Button(btn_r, text='📌',
+                              command=lambda p=path: self._popout_image_window(p),
+                              bg='#EFF6FF', fg='#1A6FD4', relief='flat',
+                              font=('Microsoft YaHei', 8), padx=6, pady=2,
+                              cursor='hand2').pack(side=tk.LEFT, padx=(0, 2))
                     tk.Button(btn_r, text='💾 保存',
                               command=lambda p=path: self._save_image_file(p),
                               bg='#F0FDF4', fg='#16A34A', relief='flat',
-                              font=('Microsoft YaHei', 8), padx=8, pady=2,
+                              font=('Microsoft YaHei', 8), padx=6, pady=2,
                               cursor='hand2').pack(side=tk.LEFT)
 
                     thumb.bind('<Button-1>', lambda e, p=path: self._preview_full_image(p))
@@ -2097,6 +2199,36 @@ class OCRApp:
                 text=f"⚠️ 未配置密钥：{'、'.join(hints)}",
                 fg='orange'
             )
+
+    def _get_export_default_name(self):
+        """生成导出文件名：书名_页码（如果没有书名则用日期）"""
+        book_name = ''
+        page_no = ''
+        if hasattr(self, '_book_name_var'):
+            book_name = self._book_name_var.get().strip()
+        if hasattr(self, '_book_page_var'):
+            try:
+                page_no = int(self._book_page_var.get())
+            except (ValueError, TypeError):
+                page_no = ''
+        if book_name:
+            return f'{book_name}_第{page_no}页' if page_no != '' else book_name
+        return datetime.now().strftime('%Y-%m-%d')
+
+    def _get_export_save_path(self, ext):
+        """生成导出文件完整路径：系统文档/OCR导出/ + 自动文件名，不弹对话框"""
+        name = self._get_export_default_name()
+        save_dir = (getattr(self, 'export_save_path', '') or
+                    os.path.join(os.path.expanduser('~'), 'Documents', 'OCR导出'))
+        os.makedirs(save_dir, exist_ok=True)
+        filename = f'{name}.{ext}'
+        path = os.path.join(save_dir, filename)
+        # 避免覆盖同名文件
+        if os.path.exists(path):
+            timestamp = datetime.now().strftime('%H%M%S')
+            filename = f'{name}_{timestamp}.{ext}'
+            path = os.path.join(save_dir, filename)
+        return path
 
     def _has_ocr_key(self, ocr_type):
         if ocr_type == 'accurate':
@@ -4424,19 +4556,30 @@ class OCRApp:
         self.start_inline_edit(iid, '#0')
     
     def _set_status(self, state):
-        """更新左下角状态栏：idle=蓝色就绪，running=黄色识别中，done=绿色识别成功"""
-        if not hasattr(self, '_status_dot') or not hasattr(self, '_status_text'):
+        """更新左下角状态栏：idle=灰色就绪，running=橙色识别中，done=绿色识别成功"""
+        if not hasattr(self, '_status_bar'):
             return
+        bar = self._status_bar
         if state == 'running':
-            self._status_dot.config(fg='#F59E0B')
-            self._status_text.config(text='识别中')
+            bar.configure(bg='#FFF7ED')
+            bar.winfo_children()[0].configure(bg='#FFF7ED') if bar.winfo_children() else None
+            self._status_dot.config(bg='#FFF7ED', fg='#F97316', font=('Arial', 12))
+            self._status_text.config(bg='#FFF7ED', fg='#F97316',
+                                     text='⚡ 识别中...',
+                                     font=('Microsoft YaHei', 9, 'bold'))
         elif state == 'done':
-            self._status_dot.config(fg='#22C55E')
-            self._status_text.config(text='识别成功')
-            self.root.after(3000, lambda: self._set_status('idle'))
+            bar.configure(bg='#ECFDF5')
+            self._status_dot.config(bg='#ECFDF5', fg='#22C55E', font=('Arial', 10))
+            self._status_text.config(bg='#ECFDF5', fg='#16A34A',
+                                     text='✓ 识别成功',
+                                     font=('Microsoft YaHei', 9, 'bold'))
+            self.root.after(4000, lambda: self._set_status('idle'))
         else:
-            self._status_dot.config(fg='#3B82F6')
-            self._status_text.config(text='就绪')
+            bar.configure(bg='#FFFFFF')
+            self._status_dot.config(bg='#FFFFFF', fg='#3B82F6', font=('Arial', 10))
+            self._status_text.config(bg='#FFFFFF', fg='#6B7280',
+                                     text='就绪',
+                                     font=('Microsoft YaHei', 9))
 
     def show_toast(self, message, duration=3000):
         """右下角弹出自动消失的 Toast 通知"""
@@ -5853,32 +5996,18 @@ class OCRApp:
             messagebox.showwarning("提示", "没有内容可以导出！")
             return
             
-        path = filedialog.asksaveasfilename(
-            defaultextension=".txt",
-            filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")],
-            title="导出文本报告"
-        )
-        
-        if path:
-            try:
-                # 过滤掉分类标题行
-                filtered = [l for l in raw.splitlines() if not (l.strip().startswith("【") and "】" in l)]
-                content = "\n".join(filtered).strip()
-                
-                # 写入文件
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(content)
-                
-                # 保存导出记录
-                self.save_export_record(path, content)
-                
-                # 显示成功消息
-                file_size = len(content.encode('utf-8'))
-                line_count = len(filtered)
-                self.show_toast(f"✅ 导出成功\n📁 {os.path.basename(path)}\n{line_count} 行 · {file_size} 字节")
-                
-            except Exception as e:
-                messagebox.showerror("导出失败", f"导出文件时出错：{str(e)}")
+        path = self._get_export_save_path('txt')
+        try:
+            filtered = [l for l in raw.splitlines() if not (l.strip().startswith("【") and "】" in l)]
+            content = "\n".join(filtered).strip()
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            self.save_export_record(path, content)
+            file_size = len(content.encode('utf-8'))
+            line_count = len(filtered)
+            self.show_toast(f'✅ 导出成功\n📁 已保存到：{os.path.basename(path)}\n{line_count} 行 · {file_size} 字节')
+        except Exception as e:
+            messagebox.showerror("导出失败", f"导出文件时出错：{str(e)}")
 
     def export_excel_file(self):
         """导出 Excel：从文本报告读取内容，支持三列和仅名称模式。"""
@@ -5886,13 +6015,7 @@ class OCRApp:
             if not self.confirm_export_with_red_name_group_issues():
                 return
 
-            path = filedialog.asksaveasfilename(
-                defaultextension=".xlsx",
-                filetypes=[("Excel 文件", "*.xlsx"), ("所有文件", "*.*")],
-                title="导出 Excel"
-            )
-            if not path:
-                return
+            path = self._get_export_save_path('xlsx')
 
             # 获取报告文本内容
             report_content = self.report_text.get("1.0", tk.END).strip()
@@ -6965,8 +7088,7 @@ class OCRApp:
         if count == 1:
             # 单张：直接按当前选中模式识别
             self.select_file_internal(image_files[0])
-            mode = getattr(self, '_selected_ocr_mode', tk.StringVar()).get()
-            self.root.after(200, lambda: self._start_ocr_and_parse())
+            self.progress_label.config(text="✓ 图片已选择，请点击「▶ 开始识别」")
 
         elif count == 2:
             # 两张：询问是否拼接
@@ -7011,9 +7133,9 @@ class OCRApp:
             win.bind('<Escape>', lambda e: win.destroy())
 
         else:
-            # 多张：直接批量识别
+            # 多张：批量选择，等待用户点击开始识别
             self.batch_select_files_internal(image_files)
-            self.root.after(200, lambda: self._start_ocr_and_parse())
+            self.progress_label.config(text=f"✓ 已选择 {len(image_files)} 张图片，请点击「▶ 开始识别」")
 
     def _show_drop_preview_options(self, image_files):
         """显示拖入图片预览和推荐操作。"""
@@ -7899,14 +8021,15 @@ class OCRApp:
         if not self.image_paths:
             messagebox.showwarning("警告", "请先选择图片文件！")
             return
-        
+
         if not API_KEY or not SECRET_KEY:
             messagebox.showerror("错误", "请先在 .env 文件中配置 API_KEY 和 SECRET_KEY！")
             return
-        
+
         self.ocr_btn.config(state=tk.DISABLED)
         self.select_btn.config(state=tk.DISABLED)
-        
+        self._set_status('running')
+
         thread = threading.Thread(target=self._perform_ocr_thread, daemon=True)
         thread.start()
     
@@ -7919,8 +8042,9 @@ class OCRApp:
             total = len(self.image_paths)
             
             for idx, image_path in enumerate(self.image_paths, 1):
-                self.root.after(0, lambda i=idx, p=image_path: 
-                    self.progress_label.config(text=f"正在处理: {i}/{total} - {os.path.basename(p)}"))
+                self.root.after(0, lambda i=idx, p=image_path:
+                    self.progress_label.config(text=f"⏳ 正在识别: {i}/{total}\n{os.path.basename(p)}",
+                                              fg='#D97706'))
                 
                 self.root.after(0, lambda: self.result_text.insert(tk.END, f"\n{'='*80}\n"))
                 self.root.after(0, lambda i=idx, p=image_path: 
@@ -8042,12 +8166,13 @@ class OCRApp:
                 results_copy = [r.copy() for r in self.all_results]
                 self.root.after(0, lambda: self.add_to_history('高精度识别', results_copy))
             
-            self.root.after(0, lambda: self.progress_label.config(text=f"✓ 完成！共处理 {total} 个文件"))
+            self.root.after(0, lambda: self.progress_label.config(text=f"✓ 识别完成 共 {total} 个文件", fg='#16A34A'))
             self.root.after(0, lambda: self.export_btn.config(state=tk.NORMAL))
             self.root.after(0, lambda: self.copy_btn.config(state=tk.NORMAL))
             self.root.after(0, lambda: self.add_zeros_btn.config(state=tk.NORMAL))
             self.root.after(0, self._update_ocr_btn_by_keys)
             self.root.after(0, lambda: self.select_btn.config(state=tk.NORMAL))
+            self.root.after(0, lambda: self._set_status('done'))
 
             status_msg = f" 高精度识别完成 | 总:{total}"
             if api_success_count > 0:
@@ -8062,7 +8187,7 @@ class OCRApp:
             if skipped_count > 0:
                 status_msg += " | 💡跳过的图片可用快速识别"
             
-            self.root.after(0, lambda m=status_msg: self.progress_label.config(text=m))
+            self.root.after(0, lambda m=status_msg: (self.progress_label.config(text=m, fg='#16A34A'), None))
         
         except Exception as e:
             self.root.after(0, lambda: self.result_text.insert(tk.END, f"\n发生错误：{str(e)}\n"))
@@ -8089,12 +8214,13 @@ class OCRApp:
         self.quick_ocr_btn.config(state=tk.DISABLED)
         self.general_ocr_btn.config(state=tk.DISABLED)
         self.select_btn.config(state=tk.DISABLED)
+        self._set_status('running')
 
         def _thread():
             try:
                 image_path = self.image_paths[0]
                 self.root.after(0, lambda: self.result_text.delete(1.0, tk.END))
-                self.root.after(0, lambda: self.progress_label.config(text="通用识别中（截图）..."))
+                self.root.after(0, lambda: self.progress_label.config(text="⏳ 通用识别中...", fg='#F59E0B'))
                 self.all_results = []
 
                 image_hash, cached_result = self.get_cached_ocr_result(image_path, 'general')
@@ -8180,8 +8306,9 @@ class OCRApp:
             total = len(self.image_paths)
             
             for idx, image_path in enumerate(self.image_paths, 1):
-                self.root.after(0, lambda i=idx, p=image_path: 
-                    self.progress_label.config(text=f"通用识别中: {i}/{total} - {os.path.basename(p)}"))
+                self.root.after(0, lambda i=idx, p=image_path:
+                    self.progress_label.config(text=f"⏳ 通用识别: {i}/{total}\n{os.path.basename(p)}",
+                                              fg='#F59E0B'))
                 
                 self.root.after(0, lambda: self.result_text.insert(tk.END, f"\n{'='*80}\n"))
                 self.root.after(0, lambda i=idx, p=image_path: 
@@ -8296,12 +8423,13 @@ class OCRApp:
                 results_copy = [r.copy() for r in self.all_results]
                 self.root.after(0, lambda: self.add_to_history('通用识别', results_copy))
             
-            self.root.after(0, lambda: self.progress_label.config(text=f"✓ 完成！共处理 {total} 个文件"))
+            self.root.after(0, lambda: self.progress_label.config(text=f"✓ 识别完成 共 {total} 个文件", fg='#16A34A'))
             self.root.after(0, lambda: self.export_btn.config(state=tk.NORMAL))
             self.root.after(0, lambda: self.copy_btn.config(state=tk.NORMAL))
             self.root.after(0, lambda: self.add_zeros_btn.config(state=tk.NORMAL))
             self.root.after(0, self._update_ocr_btn_by_keys)
             self.root.after(0, lambda: self.select_btn.config(state=tk.NORMAL))
+            self.root.after(0, lambda: self._set_status('done'))
 
             status_msg = f" 通用识别完成 | 总:{total}"
             if api_success_count > 0:
@@ -8316,7 +8444,7 @@ class OCRApp:
             if skipped_count > 0:
                 status_msg += " | 💡跳过的图片可用其他识别模式"
             
-            self.root.after(0, lambda m=status_msg: self.progress_label.config(text=m))
+            self.root.after(0, lambda m=status_msg: (self.progress_label.config(text=m, fg='#16A34A'), None))
         
         except Exception as e:
             self.root.after(0, lambda: self.result_text.insert(tk.END, f"\n发生错误：{str(e)}\n"))
@@ -8339,7 +8467,8 @@ class OCRApp:
         self.quick_ocr_btn.config(state=tk.DISABLED)
         self.general_ocr_btn.config(state=tk.DISABLED)
         self.select_btn.config(state=tk.DISABLED)
-        
+        self._set_status('running')
+
         thread = threading.Thread(target=self._perform_quick_ocr_thread, daemon=True)
         thread.start()
     
@@ -8352,8 +8481,9 @@ class OCRApp:
             total = len(self.image_paths)
             
             for idx, image_path in enumerate(self.image_paths, 1):
-                self.root.after(0, lambda i=idx, p=image_path: 
-                    self.progress_label.config(text=f"快速识别中: {i}/{total} - {os.path.basename(p)}"))
+                self.root.after(0, lambda i=idx, p=image_path:
+                    self.progress_label.config(text=f"⏳ 快速识别: {i}/{total}\n{os.path.basename(p)}",
+                                              fg='#F59E0B'))
                 
                 self.root.after(0, lambda: self.result_text.insert(tk.END, f"\n{'='*80}\n"))
                 self.root.after(0, lambda i=idx, p=image_path: 
@@ -8468,12 +8598,13 @@ class OCRApp:
                 results_copy = [r.copy() for r in self.all_results]
                 self.root.after(0, lambda: self.add_to_history('快速识别', results_copy))
             
-            self.root.after(0, lambda: self.progress_label.config(text=f"✓ 完成！共处理 {total} 个文件"))
+            self.root.after(0, lambda: self.progress_label.config(text=f"✓ 识别完成 共 {total} 个文件", fg='#16A34A'))
             self.root.after(0, lambda: self.export_btn.config(state=tk.NORMAL))
             self.root.after(0, lambda: self.copy_btn.config(state=tk.NORMAL))
             self.root.after(0, lambda: self.add_zeros_btn.config(state=tk.NORMAL))
             self.root.after(0, self._update_ocr_btn_by_keys)
             self.root.after(0, lambda: self.select_btn.config(state=tk.NORMAL))
+            self.root.after(0, lambda: self._set_status('done'))
 
             status_msg = f" 快速识别完成 | 总:{total}"
             if api_success_count > 0:
@@ -8488,7 +8619,7 @@ class OCRApp:
             if skipped_count > 0:
                 status_msg += " | 💡跳过的图片可用高精度识别"
             
-            self.root.after(0, lambda m=status_msg: self.progress_label.config(text=m))
+            self.root.after(0, lambda m=status_msg: (self.progress_label.config(text=m, fg='#16A34A'), None))
         
         except Exception as e:
             self.root.after(0, lambda: self.result_text.insert(tk.END, f"\n发生错误：{str(e)}\n"))
@@ -10276,156 +10407,68 @@ class OCRApp:
         
         tk.Label(history_window, text=info_text, fg="gray", font=("Arial", 10)).pack(pady=5)
     
-    def show_api_key_settings(self):
-        """显示API密钥设置窗口"""
-        settings_window = self.create_popup_window(self.root, "API密钥设置", "api_key_settings", 700, 700)
-        
-        tk.Label(settings_window, text="🔑 OCR 密钥设置", 
-                font=("Arial", 14, "bold")).pack(pady=15)
-        
-        tk.Label(settings_window, text="修改后将自动保存到 .env 文件", 
-                fg="gray", font=("Arial", 10)).pack(pady=5)
-        
-        # 设置框架
-        settings_frame = tk.Frame(settings_window)
-        settings_frame.pack(pady=20, padx=30, fill=tk.BOTH, expand=True)
-        
-        # 高精度识别密钥
-        tk.Label(settings_frame, text="高精度识别密钥：", 
-                font=("Arial", 11, "bold"), fg="#2196F3").grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=10)
-        
-        tk.Label(settings_frame, text="API Key:").grid(row=1, column=0, sticky=tk.W, pady=5)
-        api_key_var = tk.StringVar(value=API_KEY)
-        api_key_entry = tk.Entry(settings_frame, textvariable=api_key_var, width=50, font=("Arial", 10))
-        api_key_entry.grid(row=1, column=1, sticky=tk.W, pady=5, padx=10)
-        
-        tk.Label(settings_frame, text="Secret Key:").grid(row=2, column=0, sticky=tk.W, pady=5)
-        secret_key_var = tk.StringVar(value=SECRET_KEY)
-        secret_key_entry = tk.Entry(settings_frame, textvariable=secret_key_var, width=50, font=("Arial", 10))
-        secret_key_entry.grid(row=2, column=1, sticky=tk.W, pady=5, padx=10)
-        
-        # 分隔线
-        tk.Frame(settings_frame, height=2, bg="gray").grid(row=3, column=0, columnspan=2, sticky=tk.EW, pady=15)
-        
-        # 快速识别密钥
-        tk.Label(settings_frame, text="快速识别密钥", 
-                font=("Arial", 11, "bold"), fg="#00BCD4").grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=10)
-        
-        tk.Label(settings_frame, text="API Key:").grid(row=5, column=0, sticky=tk.W, pady=5)
-        api_key_basic_var = tk.StringVar(value=API_KEY_BASIC)
-        api_key_basic_entry = tk.Entry(settings_frame, textvariable=api_key_basic_var, width=50, font=("Arial", 10))
-        api_key_basic_entry.grid(row=5, column=1, sticky=tk.W, pady=5, padx=10)
-        
-        tk.Label(settings_frame, text="Secret Key:").grid(row=6, column=0, sticky=tk.W, pady=5)
-        secret_key_basic_var = tk.StringVar(value=SECRET_KEY_BASIC)
-        secret_key_basic_entry = tk.Entry(settings_frame, textvariable=secret_key_basic_var, width=50, font=("Arial", 10))
-        secret_key_basic_entry.grid(row=6, column=1, sticky=tk.W, pady=5, padx=10)
-        
-        # 分隔线
-        tk.Frame(settings_frame, height=2, bg="gray").grid(row=7, column=0, columnspan=2, sticky=tk.EW, pady=15)
-        
-        # 通用识别密钥
-        tk.Label(settings_frame, text="通用识别密钥", 
-                font=("Arial", 11, "bold"), fg="#9C27B0").grid(row=8, column=0, columnspan=2, sticky=tk.W, pady=10)
-        
-        tk.Label(settings_frame, text="API Key:").grid(row=9, column=0, sticky=tk.W, pady=5)
-        api_key_general_var = tk.StringVar(value=API_KEY_GENERAL)
-        api_key_general_entry = tk.Entry(settings_frame, textvariable=api_key_general_var, width=50, font=("Arial", 10))
-        api_key_general_entry.grid(row=9, column=1, sticky=tk.W, pady=5, padx=10)
-        
-        tk.Label(settings_frame, text="Secret Key:").grid(row=10, column=0, sticky=tk.W, pady=5)
-        secret_key_general_var = tk.StringVar(value=SECRET_KEY_GENERAL)
-        secret_key_general_entry = tk.Entry(settings_frame, textvariable=secret_key_general_var, width=50, font=("Arial", 10))
-        secret_key_general_entry.grid(row=10, column=1, sticky=tk.W, pady=5, padx=10)
-        
-        # 提示信息
-        hint_text = "💡 提示：\n• 高精度识别密钥为必填项\n• 快速/通用密钥为空时，对应按钮不可用\n• Key 和 Secret Key 必须成对填写\n 修改后立即生效，无需重启程序"
-        tk.Label(settings_frame, text=hint_text, fg="blue", justify=tk.LEFT,
-                font=("Arial", 9)).grid(row=11, column=0, columnspan=2, pady=15, sticky=tk.W)
-        
-        def save_api_keys():
-            try:
-                new_api_key = api_key_var.get().strip()
-                new_secret_key = secret_key_var.get().strip()
-                new_api_key_basic = api_key_basic_var.get().strip()
-                new_secret_key_basic = secret_key_basic_var.get().strip()
-                new_api_key_general = api_key_general_var.get().strip()
-                new_secret_key_general = secret_key_general_var.get().strip()
-                
-                # 验证必填项
-                if not new_api_key or not new_secret_key:
-                    messagebox.showerror("错误", "高精度识别的API Key和Secret Key不能为空！")
-                    return
-                if bool(new_api_key_basic) != bool(new_secret_key_basic):
-                    messagebox.showerror("错误", "快速识别的API Key和Secret Key必须同时填写，或同时留空！")
-                    return
-                if bool(new_api_key_general) != bool(new_secret_key_general):
-                    messagebox.showerror("错误", "通用识别的API Key和Secret Key必须同时填写，或同时留空！")
-                    return
-                
-                # 更新全局变量
-                global API_KEY, SECRET_KEY, API_KEY_BASIC, SECRET_KEY_BASIC, API_KEY_GENERAL, SECRET_KEY_GENERAL
-                API_KEY = new_api_key
-                SECRET_KEY = new_secret_key
-                API_KEY_BASIC = new_api_key_basic
-                SECRET_KEY_BASIC = new_secret_key_basic
-                API_KEY_GENERAL = new_api_key_general
-                SECRET_KEY_GENERAL = new_secret_key_general
-                
-                # 保存到.env文件
-                env_path = Path(__file__).parent / '.env'
-                env_lines = []
-                
-                # 读取现有的.env文件（如果存在）
-                existing_keys = set()
-                if env_path.exists():
-                    with open(env_path, 'r', encoding='utf-8') as f:
-                        for line in f:
-                            line = line.strip()
-                            if line and not line.startswith('#') and '=' in line:
-                                key = line.split('=', 1)[0].strip()
-                                if key not in ['BAIDU_API_KEY', 'BAIDU_SECRET_KEY', 
-                                             'BAIDU_API_KEY_BASIC', 'BAIDU_SECRET_KEY_BASIC',
-                                             'BAIDU_API_KEY_GENERAL', 'BAIDU_SECRET_KEY_GENERAL']:
-                                    env_lines.append(line)
-                
-                # 添加新的密钥
-                env_lines.append(f"BAIDU_API_KEY={new_api_key}")
-                env_lines.append(f"BAIDU_SECRET_KEY={new_secret_key}")
-                
-                if new_api_key_basic:
-                    env_lines.append(f"BAIDU_API_KEY_BASIC={new_api_key_basic}")
-                if new_secret_key_basic:
-                    env_lines.append(f"BAIDU_SECRET_KEY_BASIC={new_secret_key_basic}")
-                
-                if new_api_key_general:
-                    env_lines.append(f"BAIDU_API_KEY_GENERAL={new_api_key_general}")
-                if new_secret_key_general:
-                    env_lines.append(f"BAIDU_SECRET_KEY_GENERAL={new_secret_key_general}")
-                
-                # 写入文件
-                with open(env_path, 'w', encoding='utf-8') as f:
-                    f.write('\n'.join(env_lines))
-                
-                settings_window.destroy()
-                messagebox.showinfo("成功", 
-                    "API密钥已保存！\n\n"
-                    "密钥已更新并保存到 .env 文件\n"
-                    "立即生效，无需重启程序")
-                self._update_ocr_btn_by_keys()
-            
-            except Exception as e:
-                messagebox.showerror("错误", f"保存失败：{str(e)}")
-        
-        # 按钮
-        btn_frame = tk.Frame(settings_window)
-        btn_frame.pack(pady=15)
-        
-        tk.Button(btn_frame, text="保存", command=save_api_keys,
-                 bg="#4CAF50", fg="white", padx=30, pady=8, font=("Arial", 11)).pack(side=tk.LEFT, padx=5)
-        
-        tk.Button(btn_frame, text="取消", command=settings_window.destroy,
-                 bg="#757575", fg="white", padx=30, pady=8, font=("Arial", 11)).pack(side=tk.LEFT, padx=5)
+    def show_settings_panel(self):
+        """右上角设置面板：书籍信息 + 导出设置 + 快捷操作"""
+        win = self.create_popup_window(self.root, "设置", "top_settings", 480, 270)
+        BG = 'white'
+
+        # ── 导出设置 ──
+        sec2 = tk.LabelFrame(win, text='📁 导出设置', padx=12, pady=10, bg=BG,
+                             font=('Microsoft YaHei', 10, 'bold'), fg='#374151')
+        sec2.pack(fill=tk.X, padx=20, pady=(12, 0))
+
+        path_row = tk.Frame(sec2, bg=BG)
+        path_row.pack(fill=tk.X)
+        path_text = self.export_save_path if self.export_save_path else '默认：文档/OCR导出'
+        path_lbl = tk.Label(path_row, text=path_text, bg=BG,
+                            fg='#2563EB' if self.export_save_path else '#9CA3AF',
+                            font=('Microsoft YaHei', 9), anchor='w', cursor='hand2')
+        path_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        path_lbl.bind('<Button-1>', lambda e: (
+            self._set_export_save_path(),
+            path_lbl.config(
+                text=self.export_save_path or '默认：文档/OCR导出',
+                fg='#2563EB' if self.export_save_path else '#9CA3AF')))
+        tk.Button(path_row, text='设置', command=lambda: (
+            self._set_export_save_path(),
+            path_lbl.config(
+                text=self.export_save_path or '默认：文档/OCR导出',
+                fg='#2563EB' if self.export_save_path else '#9CA3AF')),
+                  bg='#E5E7EB', relief='flat', font=('Microsoft YaHei', 8),
+                  padx=8, cursor='hand2').pack(side=tk.LEFT, padx=(4, 2))
+        tk.Button(path_row, text='✕', command=lambda: (
+            self._clear_export_save_path(),
+            path_lbl.config(text='默认：文档/OCR导出', fg='#9CA3AF')),
+                  bg='#E5E7EB', fg='#EF4444', relief='flat',
+                  font=('Microsoft YaHei', 8), padx=6, cursor='hand2').pack(side=tk.LEFT)
+
+        # ── 快捷操作 ──
+        sec3 = tk.LabelFrame(win, text='🔧 快捷操作', padx=12, pady=10, bg=BG,
+                             font=('Microsoft YaHei', 10, 'bold'), fg='#374151')
+        sec3.pack(fill=tk.X, padx=20, pady=(12, 0))
+
+        btn_r = tk.Frame(sec3, bg=BG)
+        btn_r.pack()
+        tk.Button(btn_r, text='加|0|0', command=lambda: (win.destroy(), self.add_zeros_to_lines()),
+                  bg='white', fg='#374151', relief='flat',
+                  highlightthickness=1, highlightbackground='#E5E7EB',
+                  font=('Microsoft YaHei', 9), padx=12, pady=4,
+                  cursor='hand2').pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(btn_r, text='导出', command=lambda: (win.destroy(), self.export_results()),
+                  bg='white', fg='#374151', relief='flat',
+                  highlightthickness=1, highlightbackground='#E5E7EB',
+                  font=('Microsoft YaHei', 9), padx=12, pady=4,
+                  cursor='hand2').pack(side=tk.LEFT)
+
+        # 底部按钮
+        bottom = tk.Frame(win, bg=BG)
+        bottom.pack(fill=tk.X, padx=20, pady=(16, 12))
+        tk.Button(bottom, text='完成', command=win.destroy,
+                  bg='#1A6FD4', fg='white', font=('Microsoft YaHei', 10, 'bold'),
+                  padx=24, pady=5, cursor='hand2').pack(side=tk.RIGHT)
+        tk.Button(bottom, text='取消', command=win.destroy,
+                  bg='#F3F4F6', fg='#374151', font=('Microsoft YaHei', 10),
+                  padx=24, pady=5, cursor='hand2').pack(side=tk.RIGHT, padx=(0, 8))
     
     def show_history_detail(self, history_item):
         """显示历史记录详情"""
@@ -10901,19 +10944,12 @@ class OCRApp:
         tree.tag_configure("total", background="#E8F5E9", font=("Microsoft YaHei", self.current_font_size, "bold"))
     
     def export_results(self):
-        """导出识别结果"""
+        """导出识别结果（直接保存）"""
         if not self.all_results:
             messagebox.showwarning("警告", "没有可导出的结果！")
             return
-        
-        filepath = filedialog.asksaveasfilename(
-            defaultextension=".txt",
-            filetypes=[("文本文件", "*.txt"), ("CSV文件", "*.csv"), ("所有文件", "*.*")]
-        )
-        
-        if not filepath:
-            return
-        
+
+        filepath = self._get_export_save_path('txt')
         try:
             with open(filepath, 'w', encoding='utf-8') as f:
                 for result in self.all_results:
@@ -10921,17 +10957,18 @@ class OCRApp:
                     f.write(f"文件: {result['file']}\n")
                     f.write(f"识别行数: {result['count']}\n")
                     f.write("="*80 + "\n\n")
-                    
+
                     if result['count'] > 0:
                         for line in result['lines']:
                             f.write(line + "\n")
                     else:
                         f.write("识别失败\n")
-                    
+
                     f.write("\n\n")
-            
+
             self.progress_label.config(text=f"✓ 已导出到：{os.path.basename(filepath)}")
-        
+            self.show_toast(f'✅ 导出成功\n📁 {os.path.basename(filepath)}')
+
         except Exception as e:
             messagebox.showerror("错误", f"导出失败：{str(e)}")
     
@@ -10950,6 +10987,22 @@ class OCRApp:
         self.store.set('merge_save_path', '')
         if label_widget:
             label_widget.config(text='未设置（点击设置）', fg='#6B7280')
+
+    def _set_export_save_path(self):
+        """设置导出文件的默认保存目录"""
+        path = filedialog.askdirectory(title='选择导出文件保存目录')
+        if path:
+            self.export_save_path = path
+            self.store.set('export_save_path', path)
+            if hasattr(self, '_export_path_label'):
+                self._export_path_label.config(text=path, fg='#2563EB')
+
+    def _clear_export_save_path(self):
+        """清除导出文件的默认保存目录"""
+        self.export_save_path = ''
+        self.store.set('export_save_path', '')
+        if hasattr(self, '_export_path_label'):
+            self._export_path_label.config(text='默认：文档/OCR导出', fg='#9CA3AF')
 
     def _run_ocr_by_mode(self, mode, delay=500):
         """根据模式字符串调度识别"""
@@ -11889,24 +11942,14 @@ class OCRApp:
                         merged.save(temp_path, format='JPEG', quality=90)
 
                         if user_choice == 'save':
-                            save_path = filedialog.asksaveasfilename(
-                                defaultextension=".jpg",
-                                filetypes=[
-                                    ("JPEG图片", "*.jpg"),
-                                    ("PNG图片", "*.png"),
-                                    ("所有文件", "*.*")
-                                ],
-                                initialfile=f"merged_{len(cropped_images)}regions_w{total_width}xh{max_height}.jpg"
-                            )
-
-                            if save_path:
-                                if save_path.lower().endswith('.png'):
-                                    merged.save(save_path, format='PNG')
-                                else:
-                                    merged.save(save_path, format='JPEG', quality=95)
-                                self.progress_label.config(
-                                    text=f"✓ 拼接图片已保存到：{os.path.basename(save_path)}"
-                                )
+                            # 用时间戳自动命名，不弹对话框
+                            timestamp = datetime.now().strftime('%m-%d-%H-%M-%S')
+                            filename = f'crop_{len(cropped_images)}w{total_width}h{max_height}_{timestamp}.jpg'
+                            save_dir = self.merge_save_path or os.path.expanduser('~\\Pictures')
+                            os.makedirs(save_dir, exist_ok=True)
+                            save_path = os.path.join(save_dir, filename)
+                            merged.save(save_path, format='JPEG', quality=95)
+                            self.show_toast(f'✓ 已保存：{os.path.basename(save_path)}')
 
                         self.result_text.delete(1.0, tk.END)
                         self.result_text.insert(tk.END, f"✓ 已裁剪 {len(cropped_images)} 个区域并拼接\n")
