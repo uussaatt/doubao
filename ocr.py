@@ -223,7 +223,7 @@ def ocr_image(image_path):
         'image': image_base64,
         'detect_direction': 'false',
         'paragraph': 'false',
-        'probability': 'false',
+        'probability': 'true',
         'char_probability': 'false',
         'multidirectional_recognize': 'false'
     }
@@ -251,7 +251,7 @@ def ocr_image_basic(image_path):
         'image': image_base64,
         'detect_direction': 'false',
         'paragraph': 'false',
-        'probability': 'false',
+        'probability': 'true',
     }
 
     headers = {
@@ -277,7 +277,7 @@ def ocr_image_general(image_path):
         'image': image_base64,
         'detect_direction': 'false',
         'paragraph': 'false',
-        'probability': 'false',
+        'probability': 'true',
         'multidirectional_recognize': 'false'
     }
 
@@ -307,7 +307,8 @@ class DataStore:
             'popup_windows': {},
             'merge_save_path': '',
             'export_save_path': '',
-            'preview_ocr_defaults': {'merge': 'accurate', 'crop': 'general', 'screenshot': 'general'}
+            'preview_ocr_defaults': {'merge': 'accurate', 'crop': 'general', 'screenshot': 'general'},
+            'tree_column_widths': {}
         }
         self.load()
 
@@ -462,7 +463,7 @@ class OCRApp:
         # 报告分隔方式：'line'=----分隔线，'blank'=空行
         self.report_separator = 'line'
         self.report_format = 'legacy'
-        self.df = pd.DataFrame(columns=['Label', 'Y', 'X', 'Group', 'Order'])
+        self.df = pd.DataFrame(columns=['Label', 'Y', 'X', 'Group', 'Order', 'Confidence'])
         self.thresholds = []
         self.category_list = []
         self.marked_indices = set()
@@ -2239,6 +2240,18 @@ class OCRApp:
             return bool(API_KEY_GENERAL and SECRET_KEY_GENERAL)
         return False
 
+    def _save_tree_column_widths(self):
+        """保存当前分类表格的列宽到持久存储"""
+        if not hasattr(self, 'tree'):
+            return
+        widths = {}
+        for col in ('Category', 'Label', 'Confidence', 'Status', 'Group'):
+            try:
+                widths[col] = self.tree.column(col, 'width')
+            except tk.TclError:
+                pass
+        self.store.set('tree_column_widths', widths)
+
     def _sync_ocr_sidebar_mode(self, mode):
         """同步侧边栏识别模式按钮状态（从预览页调用）"""
         if not hasattr(self, '_selected_ocr_mode') or not hasattr(self, '_mode_btns'):
@@ -2315,24 +2328,47 @@ class OCRApp:
 
         self.tree = ttk.Treeview(
             tree_frame,
-            columns=('Label', 'Status', 'Group', 'Index', 'Category', 'CategoryKey'),
+            columns=('Label', 'Status', 'Group', 'Index', 'Category', 'CategoryKey', 'Confidence'),
             show='headings',
-            displaycolumns=('Category', 'Label', 'Status', 'Group'),
+            displaycolumns=('Category', 'Label', 'Confidence', 'Status', 'Group'),
             yscrollcommand=vsb.set
         )
         vsb.config(command=self.tree.yview)
 
-        self.tree.heading('Category', text='分类')
-        self.tree.heading('Label',    text='名称')
-        self.tree.heading('Status',   text='C组')
-        self.tree.heading('Group',    text='组')
+        self.tree.heading('Category',   text='分类')
+        self.tree.heading('Label',      text='名称')
+        self.tree.heading('Confidence', text='置信度')
+        self.tree.heading('Status',     text='C组')
+        self.tree.heading('Group',      text='组')
         self.tree.column('Index',       width=0,   stretch=False)
         self.tree.column('CategoryKey', width=0,   stretch=False)
         self.tree.column('Category',    width=120, minwidth=80,  stretch=False)
-        self.tree.column('Label',       width=400, minwidth=200, stretch=True)
+        self.tree.column('Label',       width=300, minwidth=200, stretch=True)
+        self.tree.column('Confidence',  width=120,  minwidth=65,  stretch=False, anchor='center')
         self.tree.column('Status',      width=60,  minwidth=50,  stretch=False)
         self.tree.column('Group',       width=55,  minwidth=40,  stretch=False)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # ── 加载用户保存的列宽 ──
+        saved_widths = self.store.get('tree_column_widths', {})
+        for col, w in saved_widths.items():
+            try:
+                self.tree.column(col, width=w)
+            except tk.TclError:
+                pass
+
+        # ── 用户手动调整列宽后自动保存 ──
+        self._tree_resize_timer = None
+        def _on_tree_resize(e):
+            # 仅处理列标题区域的双击/拖拽释放
+            region = self.tree.identify_region(e.x, e.y)
+            if region not in ('heading', 'separator'):
+                return
+            # 延迟保存，等列宽真正生效
+            if self._tree_resize_timer:
+                self.root.after_cancel(self._tree_resize_timer)
+            self._tree_resize_timer = self.root.after(500, lambda: self._save_tree_column_widths())
+        self.tree.bind('<ButtonRelease-1>', _on_tree_resize, add='+')
 
         # 绑定事件
         self.tree.bind('<ButtonPress-1>',   self.on_drag_start)
@@ -3497,8 +3533,17 @@ class OCRApp:
                 item_tags.append('row_even' if row_counter % 2 == 0 else 'row_odd')
                 row_counter += 1
 
+                if 'Confidence' not in self.df.columns:
+                    self.df['Confidence'] = 0
+                confidence = self.df.loc[idx, 'Confidence']
+                # 规范化类型（pandas 可能返回 numpy 类型）
+                try:
+                    conf_val = float(confidence)
+                except (ValueError, TypeError):
+                    conf_val = 0
+                conf_str = f'{conf_val:.0f}%' if conf_val > 0 else ''
                 self.tree.insert("", "end",
-                                 values=(label_text, "☑" if group == 'C' else "☐", group, idx, category_label, category_key),
+                                 values=(label_text, "☑" if group == 'C' else "☐", group, idx, category_label, category_key, conf_str),
                                  tags=tuple(item_tags))
         self.restore_tree_state(tree_state)
         self.generate_report_from_tree()
@@ -3671,7 +3716,8 @@ class OCRApp:
             category = self.get_tree_item_category(iid) if self.tree.exists(iid) else ""
         if category_key is None:
             category_key = self.get_tree_item_category_key(iid) if self.tree.exists(iid) else category
-        self.tree.item(iid, values=(label_text, status, group_value, idx, category, category_key))
+        conf = self.tree.item(iid, 'values')[6] if len(self.tree.item(iid, 'values')) > 6 else ''
+        self.tree.item(iid, values=(label_text, status, group_value, idx, category, category_key, conf))
 
     def update_tree_item_in_place(self, iid, label_text=None, group_value=None):
         """Update one data row in the tree without rebuilding or reordering siblings."""
@@ -5921,12 +5967,13 @@ class OCRApp:
                     label = parts[0].strip()
                     y = float(parts[1].strip())
                     x = float(parts[2].strip())
-                    # 第4列作为组
+                    # 第4列：组（A/B/C/D），第5列：置信度
                     if len(parts) > 3 and parts[3].strip() in ['A', 'B', 'C', 'D']:
                         group = parts[3].strip()
                     else:
                         group = self.get_group_by_text_color(label)
-                    data.append([label, y, x, group])
+                    confidence = int(float(parts[4].strip())) if len(parts) > 4 else 0
+                    data.append([label, y, x, group, confidence])
                 except (ValueError, TypeError):
                     skipped += 1
                     continue
@@ -5942,14 +5989,15 @@ class OCRApp:
                             group = parts2[3].strip()
                         else:
                             group = self.get_group_by_text_color(label)
-                        data.append([label, y, x, group])
+                        confidence = int(float(parts2[4].strip())) if len(parts2) > 4 else 0
+                        data.append([label, y, x, group, confidence])
                     except (ValueError, TypeError):
                         skipped += 1
                         continue
                 else:
                     skipped += 1
         if data:
-            self.df = pd.DataFrame(data, columns=['Label', 'Y', 'X', 'Group'])
+            self.df = pd.DataFrame(data, columns=['Label', 'Y', 'X', 'Group', 'Confidence'])
             self.df['Order'] = range(len(self.df))
             self.df['LassoTag'] = ''
             self.reset_all(silent=True)
@@ -7773,6 +7821,11 @@ class OCRApp:
             self.ocr_btn.config(state=tk.NORMAL if meets_accurate_requirement and has_accurate_key else tk.DISABLED)
             self.quick_ocr_btn.config(state=tk.NORMAL if meets_basic_requirement and has_basic_key else tk.DISABLED)
             self.general_ocr_btn.config(state=tk.NORMAL if meets_general_requirement and has_general_key else tk.DISABLED)
+            # 开始识别按钮：有任一可用模式就启用
+            any_mode = (meets_accurate_requirement and has_accurate_key) or \
+                       (meets_basic_requirement and has_basic_key) or \
+                       (meets_general_requirement and has_general_key)
+            self.copy_btn.config(state=tk.NORMAL if any_mode else tk.DISABLED)
             
             unlock_hint = " [已解锁]" if self.size_limit_unlocked and (width < self.size_limits["accurate_min_width"] or height < self.size_limits["accurate_min_height"]) else ""
             
@@ -7905,7 +7958,10 @@ class OCRApp:
             self.ocr_btn.config(state=tk.NORMAL if usable_accurate_count > 0 else tk.DISABLED)
             self.quick_ocr_btn.config(state=tk.NORMAL if usable_basic_count > 0 else tk.DISABLED)
             self.general_ocr_btn.config(state=tk.NORMAL if usable_general_count > 0 else tk.DISABLED)
-            
+            # 开始识别按钮：有任一可用模式就启用
+            any_mode = (usable_accurate_count > 0) or (usable_basic_count > 0) or (usable_general_count > 0)
+            self.copy_btn.config(state=tk.NORMAL if any_mode else tk.DISABLED)
+
             # 根据可用模式数量设置提示信息
             available_mode_count = sum([1 for count in [usable_accurate_count, usable_basic_count, usable_general_count] if count > 0])
             
@@ -8108,7 +8164,13 @@ class OCRApp:
                         top = location.get("top", 0)
                         left = location.get("left", 0)
                         height = location.get("height", 0)
-                        formatted_lines.append(f"{words}|{top}|{left}|{height}")
+                        prob = item.get('probability', {})
+                        if prob and isinstance(prob, dict):
+                            confidence = int(prob.get('average', 0) * 100)
+                        else:
+                            confidence = 0
+                        print(f'[CONF] prob={prob!r} -> confidence={confidence}')
+                        formatted_lines.append(f"{words}|{top}|{left}|{height}|{confidence}")
                     
                     recognized_text = "\n".join(formatted_lines)
                     self.root.after(0, lambda t=recognized_text: 
@@ -8236,7 +8298,9 @@ class OCRApp:
                             top = location.get("top", 0)
                             left = location.get("left", 0)
                             height_val = location.get("height", 0)
-                            formatted_lines.append(f"{words}|{top}|{left}|{height_val}")
+                            prob = item.get('probability', {})
+                            confidence = int(prob.get('average', 0) * 100) if isinstance(prob, dict) else 0
+                            formatted_lines.append(f"{words}|{top}|{left}|{height_val}|{confidence}")
                         recognized_text = "\n".join(formatted_lines)
                         self.root.after(0, lambda t=recognized_text: self.result_text.insert(tk.END, t + "\n"))
                         self.all_results.append({
@@ -8370,7 +8434,13 @@ class OCRApp:
                         top = location.get("top", 0)
                         left = location.get("left", 0)
                         height = location.get("height", 0)
-                        formatted_lines.append(f"{words}|{top}|{left}|{height}")
+                        prob = item.get('probability', {})
+                        if prob and isinstance(prob, dict):
+                            confidence = int(prob.get('average', 0) * 100)
+                        else:
+                            confidence = 0
+                        print(f'[CONF] prob={prob!r} -> confidence={confidence}')
+                        formatted_lines.append(f"{words}|{top}|{left}|{height}|{confidence}")
                     
                     recognized_text = "\n".join(formatted_lines)
                     self.root.after(0, lambda t=recognized_text: 
@@ -8545,7 +8615,9 @@ class OCRApp:
                         top = location.get("top", 0)
                         left = location.get("left", 0)
                         height = location.get("height", 0)
-                        text_only_lines.append(f"{words}|{top}|{left}|{height}")
+                        prob = item.get('probability', {})
+                        confidence = int(prob.get('average', 0) * 100) if isinstance(prob, dict) else 0
+                        text_only_lines.append(f"{words}|{top}|{left}|{height}|{confidence}")
                     
                     recognized_text = "\n".join(text_only_lines)
                     self.root.after(0, lambda t=recognized_text: 
@@ -8629,13 +8701,13 @@ class OCRApp:
             self.root.after(0, lambda: self.select_btn.config(state=tk.NORMAL))
     
     def clear_result(self):
-        """清空结果"""
+        """清空结果和已选择的图片"""
         self.result_text.delete(1.0, tk.END)
         self.all_results = []
+        self.image_paths = []
+        self.file_label.config(text='拖拽图片到此处\n或')
         self.progress_label.config(text="")
-        self.export_btn.config(state=tk.DISABLED)
-        self.copy_btn.config(state=tk.DISABLED)
-        self.add_zeros_btn.config(state=tk.DISABLED)
+        # 模式按钮和开始识别按钮在下次拖入/选择图片时会自动更新
     
     def copy_text(self):
         """复制识别的文字到剪贴板"""
@@ -8717,8 +8789,8 @@ class OCRApp:
                             new_lines.append(line)
                             skipped_lines += 1
                         else:
-                            # 纯文字，直接添加|0|0
-                            new_line = f"{line}|0|0"
+                            # 纯文字，添加|0|0|0（Y|X|置信度）
+                            new_line = f"{line}|0|0|0"
                             new_lines.append(new_line)
                             modified_lines += 1
                     
