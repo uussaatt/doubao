@@ -52,6 +52,12 @@ SECRET_KEY_BASIC = os.getenv("BAIDU_SECRET_KEY_BASIC", "")
 API_KEY_GENERAL = os.getenv("BAIDU_API_KEY_GENERAL", "")
 SECRET_KEY_GENERAL = os.getenv("BAIDU_SECRET_KEY_GENERAL", "")
 
+# 启动时打印密钥加载状态
+print(f"[ENV] 高精度密钥: {'已配置' if API_KEY else '未配置'}")
+print(f"[ENV] 快速密钥:   {'已配置' if API_KEY_BASIC else '未配置'}")
+print(f"[ENV] 通用密钥:   {'已配置' if API_KEY_GENERAL else '未配置'}")
+SECRET_KEY_GENERAL = os.getenv("BAIDU_SECRET_KEY_GENERAL", "")
+
 
 # === 字体配置 (Windows 环境) ===
 def configure_styles_force():
@@ -770,6 +776,7 @@ class OCRApp:
             frame.pack_forget()
         if name in self._nav_pages:
             self._nav_pages[name].pack(fill=tk.BOTH, expand=True)
+
         # 切换到历史页/统计页/图片预览时自动刷新
         if name == '历史' and hasattr(self._page_history, '_refresh'):
             self._page_history._refresh()
@@ -826,142 +833,317 @@ class OCRApp:
         self._page_stats._refresh = _reload
 
     def _render_total_stats(self, parent):
-        """渲染总计统计"""
+        """总统计 - 支持高精度/通用模式切换"""
         BG = 'white'
         BLUE = '#1A6FD4'
 
-        totals = {
-            'accurate': self._empty_ocr_stats(),
-            'basic':    self._empty_ocr_stats(),
-            'general':  self._empty_ocr_stats(),
+        sorted_dates = sorted(self.stats.keys())
+        if not sorted_dates:
+            empty = tk.Frame(parent, bg='white')
+            empty.pack(fill='both', expand=True)
+            tk.Label(empty, text='暂无统计数据', bg='white', fg='#9CA3AF',
+                     font=('Microsoft YaHei', 12)).pack(expand=True)
+            return
+
+        # ── 按模式分别构建数据 ──
+        def _build_mode_rows(mode_key):
+            rows = []
+            mc = {}
+            for ds in sorted_dates:
+                dd = self.stats[ds]
+                s = dd.get(mode_key, {})
+                da = s.get('success', 0)
+                dc = s.get('cached', 0)
+                mk = ds[:7]
+                if mk not in mc:
+                    mc[mk] = {'api': 0, 'cache': 0, 'days': 1}
+                else:
+                    mc[mk]['days'] += 1
+                mc[mk]['api'] += da
+                mc[mk]['cache'] += dc
+                cd = mc[mk]['days']
+                ma = mc[mk]['api'] / cd if cd > 0 else 0
+                mc_ = mc[mk]['cache'] / cd if cd > 0 else 0
+                try:
+                    dt = datetime.strptime(ds, '%Y-%m-%d')
+                    w = ['一','二','三','四','五','六','日'][dt.weekday()]
+                    dd_txt = f'{ds} 周{w}'
+                    cum_days = cd  # 当月累计有数据的天数
+                except Exception:
+                    dd_txt = ds
+                    cum_days = cd
+                rows.append({
+                    'date': ds, 'date_disp': dd_txt, 'month_key': mk,
+                    'cum_days': cd, 'api': da, 'cache': dc,
+                    'cum_api': mc[mk]['api'], 'cum_cache': mc[mk]['cache'],
+                    'avg_api': round(ma, 1), 'avg_cache': round(mc_, 1),
+                })
+            rows.reverse()
+            return rows
+
+        rows_accurate = _build_mode_rows('accurate')
+        rows_general  = _build_mode_rows('general')
+
+        mode_data = {
+            'accurate': {'label': '高精度', 'rows': rows_accurate, 'bg': '#E3F2FD'},
+            'general':  {'label': '通用',   'rows': rows_general,  'bg': '#F3E5F5'},
         }
-        # 按月汇总，用于计算月均
-        monthly = {}
-        for date, day_data in self.stats.items():
-            month = date[:7]
-            if month not in monthly:
-                monthly[month] = {m: self._empty_ocr_stats() for m in totals}
-            for mode in totals:
-                s = day_data.get(mode, {})
-                for k in totals[mode]:
-                    totals[mode][k] += s.get(k, 0)
-                    monthly[month][mode][k] += s.get(k, 0)
 
-        total_days = len(self.stats)
-        total_months = len(monthly) or 1
-        success_col = '🔌 接口成功' if not self.stats_count_cache_as_success else '✅ 成功(含缓存)'
-        cache_col  = '📦 缓存复用'
+        current_mode = ['accurate']
+        sort_order = [False]
+        total_days = len(sorted_dates)
 
-        # 汇总卡片
+        def fmt(n):
+            return f'{n:,}'
+
+        def fmt_avg(n):
+            return f'{n:.1f}'
+
+        m = current_mode[0]
+        cur_rows = mode_data[m]['rows']
+        total_api = sum(r['api'] for r in cur_rows)
+        total_cache = sum(r['cache'] for r in cur_rows)
+
+        PER_PAGE = 30
+        page_state = [1]
+        total_pages_val = [max(1, (len(cur_rows) + PER_PAGE - 1) // PER_PAGE)]
+
+        def _total_pages():
+            return max(1, (len(cur_rows) + PER_PAGE - 1) // PER_PAGE)
+
+        # ── 模式切换按钮 ──
+        toggle_row = tk.Frame(parent, bg=BG)
+        toggle_row.pack(fill=tk.X, padx=16, pady=(10, 4))
+        tk.Label(toggle_row, text='查看模式：', bg=BG, fg='#374151',
+                 font=('Microsoft YaHei', 9)).pack(side=tk.LEFT)
+
+        mode_btns = {}
+        for mk, md in mode_data.items():
+            b = tk.Button(toggle_row, text=md['label'],
+                          bg='white', fg='#374151', relief='flat',
+                          highlightthickness=1, highlightbackground='#E5E7EB',
+                          font=('Microsoft YaHei', 9),
+                          padx=14, pady=4, cursor='hand2')
+            b.pack(side=tk.LEFT, padx=(4, 0))
+            mode_btns[mk] = b
+
+        # ── 汇总卡片 ──
         cards = tk.Frame(parent, bg=BG)
-        cards.pack(fill=tk.X, padx=16, pady=(12, 16))
-        total_cached = sum(totals[m]['cached'] for m in totals)
-        for label, val in [('使用天数', f'{total_days} 天'),
-                            ('使用月数', f'{total_months} 月'),
-                            ('📦 缓存复用', f'{total_cached} 次')]:
+        cards.pack(fill=tk.X, padx=16, pady=(8, 8))
+        card_labels = {}
+        for lb, val in [('使用天数', None), ('接口调用', None), ('缓存复用', None)]:
             card = tk.Frame(cards, bg='#F0F7FF', highlightthickness=1,
                             highlightbackground='#BFDBFE')
-            card.pack(side=tk.LEFT, padx=(0, 12), pady=4, ipadx=18, ipady=12)
-            tk.Label(card, text=val, bg='#F0F7FF', fg=BLUE,
-                     font=('Microsoft YaHei', 16, 'bold')).pack()
-            tk.Label(card, text=label, bg='#F0F7FF', fg='#6B7280',
+            card.pack(side=tk.LEFT, padx=(0, 12), pady=4, ipadx=14, ipady=8)
+            vl = tk.Label(card, text='', bg='#F0F7FF', fg=BLUE,
+                          font=('Microsoft YaHei', 15, 'bold'))
+            vl.pack()
+            tk.Label(card, text=lb, bg='#F0F7FF', fg='#6B7280',
                      font=('Microsoft YaHei', 8)).pack()
+            card_labels[lb] = vl
 
-        # 三种模式详细（只显示高精度和通用）
-        BORDER = '#DDE3EA'
-        for mode, title, bg_c in [
-            ('accurate', '高精度识别', '#E3F2FD'),
-            ('general',  '通用识别',   '#F3E5F5'),
+        # ── 表格 ──
+        table_frame = tk.Frame(parent, bg=BG)
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 8))
+
+        vsb = ttk.Scrollbar(table_frame, orient=tk.VERTICAL)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        hsb = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
+
+        columns = ('date_disp', 'cum_days', 'api', 'cache',
+                   'cum_api', 'cum_cache', 'avg_api', 'avg_cache')
+        col_labels = {
+            'date_disp': '日期', 'cum_days': '累计天数',
+            'api': '接口调用(次)', 'cache': '缓存复用(次)',
+            'cum_api': '月累计接口', 'cum_cache': '月累计缓存',
+            'avg_api': '月日均接口', 'avg_cache': '月日均缓存',
+        }
+        col_widths = {
+            'date_disp': 155, 'cum_days': 80, 'api': 105, 'cache': 105,
+            'cum_api': 110, 'cum_cache': 110, 'avg_api': 95, 'avg_cache': 95,
+        }
+
+        self._total_tree = ttk.Treeview(
+            table_frame, columns=columns, show='headings',
+            yscrollcommand=vsb.set, xscrollcommand=hsb.set,
+            height=min(PER_PAGE + 1, len(cur_rows) + 1))
+        vsb.config(command=self._total_tree.yview)
+        hsb.config(command=self._total_tree.xview)
+
+        for col in columns:
+            self._total_tree.heading(col, text=col_labels[col])
+            self._total_tree.column(col, width=col_widths[col],
+                                    anchor='center' if col != 'date_disp' else 'w',
+                                    minwidth=60)
+
+        style = ttk.Style()
+        style.configure('Total.Treeview',
+                        font=('Microsoft YaHei', self.current_font_size),
+                        rowheight=max(int(self.current_font_size * 2.0),
+                                      self.current_font_size + 8))
+        style.configure('Total.Treeview.Heading',
+                        font=('Microsoft YaHei', 10, 'bold'),
+                        background='#F1F5F9')
+        self._total_tree.configure(style='Total.Treeview')
+
+        self._total_tree.tag_configure('odd', background='#F8FAFC')
+        self._total_tree.tag_configure('even', background='white')
+        self._total_tree.tag_configure('month_start', background='#E8F0FE',
+                                       font=('Microsoft YaHei', self.current_font_size, 'bold'))
+        self._total_tree.tag_configure('summary', background='#E8F5E9',
+                                       font=('Microsoft YaHei', self.current_font_size, 'bold'))
+
+        # ── 分页栏 ──
+        pager = tk.Frame(parent, bg=BG)
+        pager.pack(fill=tk.X, padx=16, pady=(0, 8))
+        page_lbl = tk.Label(pager, text='', bg=BG, fg='#6B7280',
+                            font=('Microsoft YaHei', 9))
+        page_lbl.pack(side=tk.LEFT)
+
+        btn_row = tk.Frame(pager, bg=BG)
+        btn_row.pack(side=tk.RIGHT)
+        for text, target_fn in [
+            ('末页 >>', lambda: _go_page(_total_pages())),
+            ('下一页 >', lambda: _go_page(page_state[0] + 1)),
+            ('< 上一页', lambda: _go_page(page_state[0] - 1)),
+            ('<< 首页', lambda: _go_page(1)),
         ]:
-            s = totals[mode]
-            days = total_days or 1
+            tk.Button(btn_row, text=text, command=target_fn,
+                      bg='#E5E7EB', relief='flat',
+                      font=('Microsoft YaHei', 9),
+                      padx=8, pady=2, cursor='hand2').pack(side=tk.RIGHT, padx=2)
 
-            # 计算每月 🔌日均接口成功（不含 📦缓存）
-            month_daily_avgs = []
-            for month, mdata in monthly.items():
-                month_days = sum(1 for d in self.stats if d[:7] == month) or 1
-                ms = mdata[mode]
-                if self.stats_count_cache_as_success:
-                    api_success = max(ms['success'] - ms['cached'], 0)
+        def _populate_page():
+            self._total_tree.delete(*self._total_tree.get_children())
+            rows = cur_rows
+            tp = _total_pages()
+            start_i = (page_state[0] - 1) * PER_PAGE
+            end_i = min(start_i + PER_PAGE, len(rows))
+            page_rows = rows[start_i:end_i]
+
+            prev_month = None
+            for i, r in enumerate(page_rows):
+                tags = ['odd' if i % 2 == 0 else 'even']
+                mk_r = r['month_key']
+                if mk_r != prev_month:
+                    tags.append('month_start')
+                    prev_month = mk_r
+                vals = (r['date_disp'], r['cum_days'],
+                        fmt(r['api']), fmt(r['cache']),
+                        fmt(r['cum_api']), fmt(r['cum_cache']),
+                        fmt_avg(r['avg_api']), fmt_avg(r['avg_cache']))
+                self._total_tree.insert('', tk.END, values=vals, tags=tuple(tags))
+
+            page_lbl.config(text=f'第 {page_state[0]}/{tp} 页   共 {len(rows)} 条')
+
+        def _go_page(p):
+            tp = _total_pages()
+            if 1 <= p <= tp and p != page_state[0]:
+                page_state[0] = p
+                _populate_page()
+
+        def _sort_by_date():
+            nonlocal cur_rows
+            sort_order[0] = not sort_order[0]
+            cur_rows.sort(key=lambda r: r['date'], reverse=not sort_order[0])
+            mode_data[current_mode[0]]['rows'] = cur_rows
+            page_state[0] = 1
+            _populate_page()
+
+        def _switch_mode(mk):
+            nonlocal cur_rows, total_api, total_cache
+            if mk == current_mode[0]:
+                return
+            current_mode[0] = mk
+            md = mode_data[mk]
+            cur_rows = md['rows']
+            total_api = sum(r['api'] for r in cur_rows)
+            total_cache = sum(r['cache'] for r in cur_rows)
+            # 更新按钮样式
+            for mk2, b in mode_btns.items():
+                if mk2 == mk:
+                    b.config(bg=BLUE, fg='white', highlightthickness=0)
                 else:
-                    api_success = ms['success']
-                month_daily_avgs.append(api_success / month_days)
-            avg_per_day = sum(month_daily_avgs) / len(month_daily_avgs) if month_daily_avgs else 0
+                    b.config(bg='white', fg='#374151', highlightthickness=1,
+                             highlightbackground='#E5E7EB')
+            # 更新汇总卡片
+            card_labels['使用天数'].config(text=f'{total_days} 天')
+            card_labels['接口调用'].config(text=fmt(total_api))
+            card_labels['缓存复用'].config(text=fmt(total_cache))
+            # 更新列头标签
+            lbl = md['label']
+            self._total_tree.heading('api', text=f'{lbl}接口调用(次)')
+            self._total_tree.heading('cache', text=f'{lbl}缓存复用(次)')
+            self._total_tree.heading('cum_api', text=f'{lbl}月累计接口')
+            self._total_tree.heading('cum_cache', text=f'{lbl}月累计缓存')
+            self._total_tree.heading('avg_api', text=f'{lbl}月日均接口')
+            self._total_tree.heading('avg_cache', text=f'{lbl}月日均缓存')
+            # 更新月份标签背景色
+            self._total_tree.tag_configure('month_start', background=md['bg'],
+                                           font=('Microsoft YaHei', self.current_font_size, 'bold'))
+            # 更新日期排序文本
+            self._total_tree.heading('date_disp',
+                                     text='日期 ▼' if sort_order[0] else '日期 ▲',
+                                     command=_sort_by_date)
+            page_state[0] = 1
+            _populate_page()
 
-            sec = tk.Frame(parent, bg=bg_c, highlightthickness=1,
-                           highlightbackground=BORDER)
-            sec.pack(fill=tk.X, padx=16, pady=(0, 8), ipadx=10, ipady=8)
-            tk.Label(sec, text=f'【{title}】', bg=bg_c, fg='#374151',
-                     font=('Microsoft YaHei', 10, 'bold')).pack(anchor='w', padx=8, pady=(6, 2))
-            info = (f"{success_col}：{s['success']} 张   "
-                    f"{cache_col}：{s['cached']} 张   "
-                    f"📊 月均日接口：{avg_per_day:.1f} 张/天")
-            tk.Label(sec, text=info, bg=bg_c, fg='#374151',
-                     font=('Microsoft YaHei', 9)).pack(anchor='w', padx=8, pady=(0, 6))
+        # 绑定模式按钮
+        for mk, b in mode_btns.items():
+            b.config(command=lambda m=mk: _switch_mode(m))
+
+        # 初始化选中模式
+        mk0 = current_mode[0]
+        for mk2, b in mode_btns.items():
+            if mk2 == mk0:
+                b.config(bg=BLUE, fg='white', highlightthickness=0)
+            else:
+                b.config(bg='white', fg='#374151', highlightthickness=1,
+                         highlightbackground='#E5E7EB')
+
+        # 更新初始列头和汇总卡片
+        lbl0 = mode_data[mk0]['label']
+        self._total_tree.heading('api', text=f'{lbl0}接口调用(次)')
+        self._total_tree.heading('cache', text=f'{lbl0}缓存复用(次)')
+        self._total_tree.heading('cum_api', text=f'{lbl0}月累计接口')
+        self._total_tree.heading('cum_cache', text=f'{lbl0}月累计缓存')
+        self._total_tree.heading('avg_api', text=f'{lbl0}月日均接口')
+        self._total_tree.heading('avg_cache', text=f'{lbl0}月日均缓存')
+        self._total_tree.tag_configure('month_start', background=mode_data[mk0]['bg'],
+                                       font=('Microsoft YaHei', self.current_font_size, 'bold'))
+        card_labels['使用天数'].config(text=f'{total_days} 天')
+        card_labels['接口调用'].config(text=fmt(total_api))
+        card_labels['缓存复用'].config(text=fmt(total_cache))
+
+        self._total_tree.heading('date_disp',
+                                 text='日期 ▼' if sort_order[0] else '日期 ▲',
+                                 command=_sort_by_date)
+        _populate_page()
+        self._total_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
 
     def _render_daily_stats(self, parent):
-        """渲染按日统计表格"""
-        success_col = '🔌 接口成功' if not self.stats_count_cache_as_success else '✅ 成功(含缓存)'
-        cache_col  = '📦 缓存复用'
-        cols = ('日期', '类型', success_col, cache_col, '失败')
+        """按日统计 — 每天高精度和通用的接口调用、缓存复用"""
+        BG = 'white'
 
-        frame = tk.Frame(parent, bg='white')
-        frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        sorted_dates = sorted(self.stats.keys(), reverse=True)
+        if not sorted_dates:
+            return
 
-        # 删除指定日期
-        ctrl = tk.Frame(parent, bg='white')
-        ctrl.pack(fill=tk.X, padx=16, pady=(0, 6))
-        tk.Label(ctrl, text='删除日期：', bg='white',
-                 font=('Microsoft YaHei', 9)).pack(side=tk.LEFT)
+        # ── 删除日期行 ──
+        ctrl = tk.Frame(parent, bg=BG)
+        ctrl.pack(fill=tk.X, padx=16, pady=(6, 4))
+        tk.Label(ctrl, text='删除日期：', bg=BG, font=('Microsoft YaHei', 9)).pack(side=tk.LEFT)
         del_var = tk.StringVar()
-        tk.Entry(ctrl, textvariable=del_var, width=14,
-                 font=('Microsoft YaHei', 9), relief='flat',
-                 highlightthickness=1, highlightbackground='#DDE3EA').pack(
-                     side=tk.LEFT, padx=(4, 8), ipady=3)
-        tk.Label(ctrl, text='密码：', bg='white',
-                 font=('Microsoft YaHei', 9)).pack(side=tk.LEFT)
+        tk.Entry(ctrl, textvariable=del_var, width=14, font=('Microsoft YaHei', 9),
+                 relief='flat', highlightthickness=1, highlightbackground='#DDE3EA'
+                 ).pack(side=tk.LEFT, padx=(4, 8), ipady=3)
+        tk.Label(ctrl, text='密码：', bg=BG, font=('Microsoft YaHei', 9)).pack(side=tk.LEFT)
         pwd_var = tk.StringVar()
-        tk.Entry(ctrl, textvariable=pwd_var, width=10, show='*',
-                 font=('Microsoft YaHei', 9), relief='flat',
-                 highlightthickness=1, highlightbackground='#DDE3EA').pack(
-                     side=tk.LEFT, padx=(4, 8), ipady=3)
-
-        vsb = ttk.Scrollbar(frame, orient=tk.VERTICAL)
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        tree = ttk.Treeview(frame, columns=cols, show='headings',
-                            yscrollcommand=vsb.set)
-        vsb.config(command=tree.yview)
-        widths = [120, 70, 120, 90, 55]
-        for col, w in zip(cols, widths):
-            tree.heading(col, text=col)
-            tree.column(col, width=w, anchor='center')
-        tree.pack(fill=tk.BOTH, expand=True)
-        tree.tag_configure('accurate', background='#E3F2FD')
-        tree.tag_configure('basic',    background='#FFF3E0')
-        tree.tag_configure('general',  background='#F3E5F5')
-        tree.tag_configure('total',    background='#E8F5E9',
-                           font=('Microsoft YaHei', self.current_font_size, 'bold'))
-
-        def _fill():
-            tree.delete(*tree.get_children())
-            for date in sorted(self.stats.keys(), reverse=True):
-                d = self.stats[date]
-                first = True
-                for mode, tag in [('accurate','accurate'),('basic','basic'),('general','general')]:
-                    s = d.get(mode, {})
-                    lbl = {'accurate':'高精度','basic':'快速','general':'通用'}[mode]
-                    tree.insert('', tk.END, iid=f'{date}_{mode}', tags=(tag,),
-                                values=(date if first else '', lbl,
-                                        s.get('success',0), s.get('cached',0),
-                                        s.get('failed',0)))
-                    first = False
-
-        def on_select(e):
-            sel = tree.selection()
-            if sel:
-                date = tree.item(sel[0], 'values')[0]
-                if date:
-                    del_var.set(date)
+        tk.Entry(ctrl, textvariable=pwd_var, width=10, show='*', font=('Microsoft YaHei', 9),
+                 relief='flat', highlightthickness=1, highlightbackground='#DDE3EA'
+                 ).pack(side=tk.LEFT, padx=(4, 8), ipady=3)
 
         def do_delete():
             dates = [d.strip() for d in re.split(r'[,\s，;；]+', del_var.get()) if d.strip()]
@@ -969,80 +1151,186 @@ class OCRApp:
             if not found:
                 messagebox.showwarning('提示', '未找到对应日期的统计记录')
                 return
-            # 校验内联密码输入框
             if pwd_var.get().strip() != self.unlock_password:
                 messagebox.showerror('错误', '密码错误！')
                 return
-            if not messagebox.askyesno('确认', f'删除 {", ".join(found)} 的统计？'):
+            if not messagebox.askyesno('确认', f'删除 {', '.join(found)} 的统计？'):
                 return
             for d in found:
                 del self.stats[d]
             self.save_stats()
             pwd_var.set('')
-            _fill()
+            del_var.set('')
+            if hasattr(self, '_page_stats') and hasattr(self._page_stats, '_refresh'):
+                self._page_stats._refresh()
 
-        tree.bind('<<TreeviewSelect>>', on_select)
         tk.Button(ctrl, text='删除', command=do_delete,
                   bg='#FEF2F2', fg='#EF4444', relief='flat',
                   font=('Microsoft YaHei', 9), padx=10, pady=3,
                   cursor='hand2').pack(side=tk.LEFT)
-        _fill()
 
-    def _render_monthly_stats(self, parent):
-        """渲染按月统计表格"""
-        success_col = '🔌 接口成功' if not self.stats_count_cache_as_success else '✅ 成功(含缓存)'
-        cache_col  = '📦 缓存复用'
-        cols = ('月份', '天数', '类型', success_col, cache_col, '📊 日均接口', '📊 日均缓存')
-
-        frame = tk.Frame(parent, bg='white')
+        # ── 表格 ──
+        frame = tk.Frame(parent, bg=BG)
         frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        cols = ('日期', '类型', '接口调用(次)', '缓存复用(次)')
         vsb = ttk.Scrollbar(frame, orient=tk.VERTICAL)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        tree = ttk.Treeview(frame, columns=cols, show='headings',
-                            yscrollcommand=vsb.set)
+        tree = ttk.Treeview(frame, columns=cols, show='headings', yscrollcommand=vsb.set,
+                            height=min(30, len(sorted_dates) * 3 + 3))
         vsb.config(command=tree.yview)
-        widths = [90, 55, 65, 110, 90, 80, 80]
+        widths = [140, 70, 110, 100]
         for col, w in zip(cols, widths):
             tree.heading(col, text=col)
-            tree.column(col, width=w, anchor='center')
+            tree.column(col, width=w, anchor='center' if col != '日期' else 'w')
         tree.pack(fill=tk.BOTH, expand=True)
+
         tree.tag_configure('accurate', background='#E3F2FD')
-        tree.tag_configure('basic',    background='#FFF3E0')
         tree.tag_configure('general',  background='#F3E5F5')
         tree.tag_configure('total',    background='#E8F5E9',
                            font=('Microsoft YaHei', self.current_font_size, 'bold'))
+
+        def _fill():
+            tree.delete(*tree.get_children())
+            for date in sorted_dates:
+                d = self.stats[date]
+                acc = d.get('accurate', {})
+                gen = d.get('general', {})
+                first = True
+                for mode, tag in [('accurate', 'accurate'), ('general', 'general')]:
+                    s = d.get(mode, {})
+                    lbl = '高精度' if mode == 'accurate' else '通用'
+                    tree.insert('', tk.END, tags=(tag,),
+                                values=(date if first else '', lbl,
+                                        s.get('success', 0), s.get('cached', 0)))
+                    first = False
+        def on_select(e):
+            sel = tree.selection()
+            if sel:
+                date = tree.item(sel[0], 'values')[0]
+                if date:
+                    del_var.set(date)
+
+        tree.bind('<<TreeviewSelect>>', on_select)
+        _fill()
+
+
+    def _render_monthly_stats(self, parent):
+        """按月统计 — 支持高精度/通用模式切换"""
+        BG = 'white'
+        BLUE = '#1A6FD4'
 
         monthly = {}
         for date, day_data in self.stats.items():
             month = date[:7]
             if month not in monthly:
-                monthly[month] = {'accurate': self._empty_ocr_stats(),
-                                  'basic':    self._empty_ocr_stats(),
-                                  'general':  self._empty_ocr_stats(),
-                                  'days': set()}
+                monthly[month] = {
+                    'accurate': self._empty_ocr_stats(),
+                    'general':  self._empty_ocr_stats(),
+                    'days': set()
+                }
             monthly[month]['days'].add(date)
-            for mode in ('accurate', 'basic', 'general'):
+            for mode in ('accurate', 'general'):
                 s = day_data.get(mode, {})
                 for k in monthly[month][mode]:
                     monthly[month][mode][k] += s.get(k, 0)
 
-        for month in sorted(monthly.keys(), reverse=True):
-            d = monthly[month]
-            days = len(d['days']) or 1
-            first = True
-            for mode, tag in [('accurate','accurate'),('basic','basic'),('general','general')]:
-                s = d[mode]
-                lbl = {'accurate':'高精度','basic':'快速','general':'通用'}[mode]
-                if self.stats_count_cache_as_success:
-                    api_success = max(s['success'] - s['cached'], 0)
-                else:
-                    api_success = s['success']
+        if not monthly:
+            return
+
+        # ── 模式切换按钮 ──
+        toggle_row = tk.Frame(parent, bg=BG)
+        toggle_row.pack(fill=tk.X, padx=16, pady=(8, 4))
+        tk.Label(toggle_row, text='查看模式：', bg=BG, fg='#374151',
+                 font=('Microsoft YaHei', 9)).pack(side=tk.LEFT)
+
+        mode_data = {
+            'accurate': {'label': '高精度', 'bg': '#E3F2FD'},
+            'general':  {'label': '通用',   'bg': '#F3E5F5'},
+        }
+        current_mode = ['accurate']
+        mode_btns = {}
+
+        for mk, md in mode_data.items():
+            b = tk.Button(toggle_row, text=md['label'],
+                          bg='white', fg='#374151', relief='flat',
+                          highlightthickness=1, highlightbackground='#E5E7EB',
+                          font=('Microsoft YaHei', 9),
+                          padx=14, pady=4, cursor='hand2')
+            b.pack(side=tk.LEFT, padx=(4, 0))
+            mode_btns[mk] = b
+
+        # ── 表格 ──
+        frame = tk.Frame(parent, bg=BG)
+        frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        cols = ('月份', '天数', '接口调用(次)', '缓存复用(次)', '日均接口', '日均缓存')
+        vsb = ttk.Scrollbar(frame, orient=tk.VERTICAL)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        tree = ttk.Treeview(frame, columns=cols, show='headings', yscrollcommand=vsb.set)
+        vsb.config(command=tree.yview)
+        widths = [100, 60, 110, 90, 80, 80]
+        for col, w in zip(cols, widths):
+            tree.heading(col, text=col)
+            tree.column(col, width=w, anchor='center')
+        tree.pack(fill=tk.BOTH, expand=True)
+
+        tree.tag_configure('item', background='white')
+        tree.tag_configure('item_alt', background='#F8FAFC')
+        tree.tag_configure('summary', background='#E8F5E9',
+                           font=('Microsoft YaHei', self.current_font_size, 'bold'))
+
+        def _fill():
+            mk = current_mode[0]
+            md = mode_data[mk]
+            tree.tag_configure('item', background='white')
+            tree.tag_configure('item_alt', background='#F8FAFC')
+
+            tree.delete(*tree.get_children())
+            # 更新列头
+            lbl = md['label']
+            tree.heading('接口调用(次)', text=f'{lbl}接口调用(次)')
+            tree.heading('缓存复用(次)', text=f'{lbl}缓存复用(次)')
+            tree.heading('日均接口', text=f'{lbl}日均接口')
+            tree.heading('日均缓存', text=f'{lbl}日均缓存')
+
+            sorted_months = sorted(monthly.keys(), reverse=True)
+            for i, month in enumerate(sorted_months):
+                d = monthly[month]
+                days = len(d['days']) or 1
+                s = d[mk]
+                api = s.get('success', 0)
+                cache = s.get('cached', 0)
+                tag = 'item' if i % 2 == 0 else 'item_alt'
                 tree.insert('', tk.END, tags=(tag,),
-                            values=(month if first else '', days if first else '',
-                                    lbl, api_success, s['cached'],
-                                    f"{api_success/days:.1f}",
-                                    f"{s['cached']/days:.1f}"))
-                first = False
+                            values=(month, days, f'{api:,}', f'{cache:,}',
+                                    f'{api/days:.1f}', f'{cache/days:.1f}'))
+
+        def _switch_mode(mk):
+            if mk == current_mode[0]:
+                return
+            current_mode[0] = mk
+            for mk2, b in mode_btns.items():
+                if mk2 == mk:
+                    b.config(bg=BLUE, fg='white', highlightthickness=0)
+                else:
+                    b.config(bg='white', fg='#374151', highlightthickness=1,
+                             highlightbackground='#E5E7EB')
+            _fill()
+
+        for mk, b in mode_btns.items():
+            b.config(command=lambda m=mk: _switch_mode(m))
+
+        # 初始选中
+        mk0 = current_mode[0]
+        for mk2, b in mode_btns.items():
+            if mk2 == mk0:
+                b.config(bg=BLUE, fg='white', highlightthickness=0)
+            else:
+                b.config(bg='white', fg='#374151', highlightthickness=1,
+                         highlightbackground='#E5E7EB')
+        _fill()
+
 
     def _render_stats_inline(self, parent):
         """兼容旧调用"""
