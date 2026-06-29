@@ -3430,13 +3430,13 @@ class OCRApp:
         item = self.tree.identify_row(event.y)
         column = self.tree.identify_column(event.x)
 
-        # 单击复选框列 - 切换C组状态
-        if item and self.is_tree_data_item(item) and column == '#3':
+        # 单击 C组列（Status=#4）- 切换C组状态
+        if item and self.is_tree_data_item(item) and column == '#4':
             self.toggle_c_group(item)
             return
 
-        # 检查是否点击了组列
-        if item and self.is_tree_data_item(item) and column == '#4':
+        # 单击 组列（Group=#5）- 弹出下拉菜单
+        if item and self.is_tree_data_item(item) and column == '#5':
             self.show_group_dropdown(item, event)
             return
 
@@ -3461,7 +3461,7 @@ class OCRApp:
             current_group = self._get_group_from_values(values)
 
             # 获取单元格位置
-            bbox = self.tree.bbox(iid, '#4')
+            bbox = self.tree.bbox(iid, '#5')
             if not bbox:
                 return
             x, y, width, height = bbox
@@ -4514,10 +4514,7 @@ class OCRApp:
     def is_group_shortcut_context(self):
         """只在分类表格页启用改组快捷键。"""
         try:
-            if self.main_notebook.select() != str(self.classifier_tab):
-                return False
-            # 新版：判断当前步骤是否为分类表格
-            current_page = getattr(self, '_current_step', '分类表格')
+            current_page = getattr(self, '_current_step', '')
             return current_page == '分类表格'
         except Exception:
             return False
@@ -4663,10 +4660,10 @@ class OCRApp:
                 if column == '#1':
                     self.start_inline_edit(iid, column)
                     return "break"
-                if column == '#2':
+                elif column == '#2':
                     self.start_inline_edit(iid, column)
                     return "break"
-                elif column == '#3':
+                elif column == '#4':
                     self.toggle_c_group(iid)
                     return "break"
 
@@ -4723,7 +4720,7 @@ class OCRApp:
                 current_value = values[0]
                 edit_type = 'item_name'
                 editor_widget = 'entry'
-            elif column == '#4':
+            elif column == '#5':
                 # 组列
                 values = self.tree.item(iid, 'values')
                 if not values or len(values) < 3:
@@ -9791,6 +9788,7 @@ class OCRApp:
         
         if changed_count > 0:
             self.show_temp_message(f"✓ 报告替换完成：修改 {changed_count} 处")
+            self.show_toast(f"✅ 替换成功\n共修改 {changed_count} 处")
         else:
             self.show_temp_message("✓ 没有匹配的内容")
 
