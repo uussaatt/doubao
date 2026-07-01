@@ -3830,6 +3830,13 @@ class OCRApp:
                 except (ValueError, TypeError):
                     conf_val = 0
                 conf_str = f'{conf_val:.0f}%' if conf_val > 0 else ''
+
+                # 置信度低于阈值时加警告背景（置信度为0/空时不处理）
+                if conf_val > 0:
+                    conf_threshold = self.store.get('conf_threshold', 0)
+                    if conf_threshold > 0 and conf_val < conf_threshold:
+                        item_tags.append('low_conf')
+
                 self.tree.insert("", "end",
                                  values=(label_text, "☑" if group == 'C' else "☐", group, idx, category_label, category_key, conf_str),
                                  tags=tuple(item_tags))
@@ -4270,6 +4277,8 @@ class OCRApp:
         # 交替行背景色
         self.tree.tag_configure('row_even', background='#FFFFFF')
         self.tree.tag_configure('row_odd', background='#F5F5F5')
+        # 低置信度警告背景（优先级最高，覆盖交替背景）
+        self.tree.tag_configure('low_conf', background='#FFF9C4')
         self.report_text.configure(font=("Microsoft YaHei", s))
 
     def on_right_click(self, event):
@@ -8509,9 +8518,16 @@ class OCRApp:
                         self.stats[today]['accurate']['skipped'] += skipped_count
                         self.save_stats()
                 
-                # 添加到历史记录（在主线程中执行）
+                # 每张图片单独存一条历史记录，页码从当前页依次递增
                 results_copy = [r.copy() for r in self.all_results]
-                self.root.after(0, lambda: self.add_to_history('高精度识别', results_copy))
+                try:
+                    base_page = int(self._book_page_var.get()) if hasattr(self, '_book_page_var') else 1
+                except (ValueError, TypeError):
+                    base_page = 1
+                for i, r in enumerate(results_copy):
+                    if r.get('count', 0) > 0 and not r.get('skipped', False):
+                        page_no = base_page + i
+                        self.root.after(0, lambda _r=r, _p=page_no: self.add_to_history('高精度识别', [_r], override_page=_p))
             
             self.root.after(0, lambda: self.progress_label.config(text=f"✓ 识别完成 共 {total} 个文件", fg='#16A34A'))
             self.root.after(0, lambda: self.export_btn.config(state=tk.NORMAL))
@@ -8774,9 +8790,16 @@ class OCRApp:
                 self.record_ocr('general', stats_success_count, failed_count, total_lines,
                                 cached_count=cached_count, cached_lines=cached_lines,
                                 api_lines=api_lines, processed_count=actual_processed)
-                # 添加到历史记录（在主线程中执行）
+                # 每张图片单独存一条历史记录，页码从当前页依次递增
                 results_copy = [r.copy() for r in self.all_results]
-                self.root.after(0, lambda: self.add_to_history('通用识别', results_copy))
+                try:
+                    base_page = int(self._book_page_var.get()) if hasattr(self, '_book_page_var') else 1
+                except (ValueError, TypeError):
+                    base_page = 1
+                for i, r in enumerate(results_copy):
+                    if r.get('count', 0) > 0 and not r.get('skipped', False):
+                        page_no = base_page + i
+                        self.root.after(0, lambda _r=r, _p=page_no: self.add_to_history('通用识别', [_r], override_page=_p))
             
             self.root.after(0, lambda: self.progress_label.config(text=f"✓ 识别完成 共 {total} 个文件", fg='#16A34A'))
             self.root.after(0, lambda: self.export_btn.config(state=tk.NORMAL))
@@ -8951,9 +8974,16 @@ class OCRApp:
                 self.record_ocr('basic', stats_success_count, failed_count, total_lines,
                                 cached_count=cached_count, cached_lines=cached_lines,
                                 api_lines=api_lines, processed_count=actual_processed)
-                # 添加到历史记录（在主线程中执行）
+                # 每张图片单独存一条历史记录，页码从当前页依次递增
                 results_copy = [r.copy() for r in self.all_results]
-                self.root.after(0, lambda: self.add_to_history('快速识别', results_copy))
+                try:
+                    base_page = int(self._book_page_var.get()) if hasattr(self, '_book_page_var') else 1
+                except (ValueError, TypeError):
+                    base_page = 1
+                for i, r in enumerate(results_copy):
+                    if r.get('count', 0) > 0 and not r.get('skipped', False):
+                        page_no = base_page + i
+                        self.root.after(0, lambda _r=r, _p=page_no: self.add_to_history('快速识别', [_r], override_page=_p))
             
             self.root.after(0, lambda: self.progress_label.config(text=f"✓ 识别完成 共 {total} 个文件", fg='#16A34A'))
             self.root.after(0, lambda: self.export_btn.config(state=tk.NORMAL))
@@ -9429,7 +9459,7 @@ class OCRApp:
         except (ValueError, TypeError):
             self._pending_history_book_page = None
 
-    def add_to_history(self, ocr_type, results):
+    def add_to_history(self, ocr_type, results, override_page=None):
         """添加识别结果到历史记录"""
         try:
             print(f"📝 开始添加历史记录：{ocr_type}, 结果数量：{len(results)}")
@@ -9441,12 +9471,15 @@ class OCRApp:
                 print("⚠️ 没有有效的识别结果，跳过保存历史记录")
                 return
 
-            # 读取当前书名和页码（以书籍信息面板的当前页为准）
+            # 读取当前书名和页码
             book_name = self._book_name_var.get().strip() if hasattr(self, '_book_name_var') else ''
-            try:
-                page_no = int(self._book_page_var.get()) if hasattr(self, '_book_page_var') else ''
-            except (ValueError, TypeError):
-                page_no = ''
+            if override_page is not None:
+                page_no = override_page
+            else:
+                try:
+                    page_no = int(self._book_page_var.get()) if hasattr(self, '_book_page_var') else ''
+                except (ValueError, TypeError):
+                    page_no = ''
 
             history_item = {
                 'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -10767,7 +10800,7 @@ class OCRApp:
     
     def show_settings_panel(self):
         """右上角设置面板：书籍信息 + 导出设置 + 快捷操作"""
-        win = self.create_popup_window(self.root, "设置", "top_settings", 480, 270)
+        win = self.create_popup_window(self.root, "设置", "top_settings", 480, 420)
         BG = 'white'
 
         # ── 导出设置 ──
@@ -10800,6 +10833,42 @@ class OCRApp:
                   bg='#E5E7EB', fg='#EF4444', relief='flat',
                   font=('Microsoft YaHei', 8), padx=6, cursor='hand2').pack(side=tk.LEFT)
 
+        # ── 置信度警告设置 ──
+        sec_conf = tk.LabelFrame(win, text='⚠ 置信度警告', padx=12, pady=10, bg=BG,
+                                 font=('Microsoft YaHei', 10, 'bold'), fg='#374151')
+        sec_conf.pack(fill=tk.X, padx=20, pady=(12, 0))
+
+        conf_row = tk.Frame(sec_conf, bg=BG)
+        conf_row.pack(fill=tk.X)
+        tk.Label(conf_row, text='低于', bg=BG, fg='#374151',
+                 font=('Microsoft YaHei', 9)).pack(side=tk.LEFT)
+        conf_var = tk.StringVar(value=str(self.store.get('conf_threshold', 0)))
+        conf_entry = tk.Entry(conf_row, textvariable=conf_var, width=6,
+                              font=('Microsoft YaHei', 9), relief='flat',
+                              highlightthickness=1, highlightbackground='#DDE3EA',
+                              justify='center')
+        conf_entry.pack(side=tk.LEFT, padx=6, ipady=3)
+        tk.Label(conf_row, text='% 的行高亮为淡黄色（0 = 不启用）', bg=BG, fg='#6B7280',
+                 font=('Microsoft YaHei', 9)).pack(side=tk.LEFT)
+
+        def save_conf_threshold():
+            try:
+                val = int(conf_var.get())
+                val = max(0, min(val, 100))
+                self.store.set('conf_threshold', val)
+                self.apply_font_style()
+                if not self.df.empty:
+                    self.refresh_all()
+                conf_var.set(str(val))
+                self.show_temp_message(f'✓ 置信度阈值已设置为 {val}%')
+            except ValueError:
+                conf_var.set(str(self.store.get('conf_threshold', 0)))
+
+        tk.Button(conf_row, text='保存', command=save_conf_threshold,
+                  bg='#1A6FD4', fg='white', relief='flat',
+                  font=('Microsoft YaHei', 8), padx=10, pady=3,
+                  cursor='hand2').pack(side=tk.LEFT, padx=(8, 0))
+
         # ── 快捷操作 ──
         sec3 = tk.LabelFrame(win, text='🔧 快捷操作', padx=12, pady=10, bg=BG,
                              font=('Microsoft YaHei', 10, 'bold'), fg='#374151')
@@ -10817,6 +10886,35 @@ class OCRApp:
                   highlightthickness=1, highlightbackground='#E5E7EB',
                   font=('Microsoft YaHei', 9), padx=12, pady=4,
                   cursor='hand2').pack(side=tk.LEFT)
+
+        conf_entry.bind('<Return>', lambda e: save_conf_threshold())
+
+        # ── 拼接图片目录设置 ──
+        sec_merge = tk.LabelFrame(win, text='🖼 拼接图片目录设置', padx=12, pady=10, bg=BG,
+                                  font=('Microsoft YaHei', 10, 'bold'), fg='#374151')
+        sec_merge.pack(fill=tk.X, padx=20, pady=(12, 0))
+
+        merge_row = tk.Frame(sec_merge, bg=BG)
+        merge_row.pack(fill=tk.X)
+        merge_text = self.merge_save_path if self.merge_save_path else '未设置（使用拼接预览页按钮设置）'
+        merge_lbl = tk.Label(merge_row, text=merge_text, bg=BG,
+                             fg='#2563EB' if self.merge_save_path else '#9CA3AF',
+                             font=('Microsoft YaHei', 9), anchor='w')
+        merge_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        def _refresh_merge_lbl():
+            merge_lbl.config(
+                text=self.merge_save_path or '未设置（使用拼接预览页按钮设置）',
+                fg='#2563EB' if self.merge_save_path else '#9CA3AF')
+
+        tk.Button(merge_row, text='设置', command=lambda: (
+            self._set_merge_save_path(), _refresh_merge_lbl()),
+                  bg='#E5E7EB', relief='flat', font=('Microsoft YaHei', 8),
+                  padx=8, cursor='hand2').pack(side=tk.LEFT, padx=(4, 2))
+        tk.Button(merge_row, text='✕', command=lambda: (
+            self._clear_merge_save_path(), _refresh_merge_lbl()),
+                  bg='#E5E7EB', fg='#EF4444', relief='flat',
+                  font=('Microsoft YaHei', 8), padx=6, cursor='hand2').pack(side=tk.LEFT)
 
         # 底部按钮
         bottom = tk.Frame(win, bg=BG)
