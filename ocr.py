@@ -7423,7 +7423,7 @@ class OCRApp:
 
     def _handle_dropped_images(self, image_files):
         """处理拖入的图片：单张直接识别，两张询问是否拼接，多张直接批量识别"""
-        self._increment_book_page_for_import()
+        self._increment_book_page_for_import(len(image_files))
 
         count = len(image_files)
 
@@ -8164,9 +8164,9 @@ class OCRApp:
                 self.select_file_internal(file_paths[0])
             else:
                 self.batch_select_files_internal(list(file_paths))
-            # 导入新图片后，当前页 +1
+            # 导入新图片后，当前页按图片数量递增
             self._capture_history_book_page()
-            self._increment_book_page_for_import()
+            self._increment_book_page_for_import(len(file_paths))
     
     def batch_select_files_internal(self, file_paths):
         """内部方法：处理批量文件选择逻辑"""
@@ -8634,8 +8634,23 @@ class OCRApp:
                 self.root.after(0, self._update_ocr_btn_by_keys)
                 self.root.after(0, lambda: self.select_btn.config(state=tk.NORMAL))
                 total_lines = sum(r['count'] for r in self.all_results)
+
+                # 记录统计
+                cached_count = sum(1 for r in self.all_results if r.get('cached') and r.get('count', 0) > 0)
+                cached_lines = sum(r['count'] for r in self.all_results if r.get('cached'))
+                success_count = sum(1 for r in self.all_results if r['count'] > 0)
+                api_success_count = success_count - cached_count
+                failed_count = sum(1 for r in self.all_results if r.get('error') and not r.get('skipped', False))
+                api_lines = total_lines - cached_lines
+                stats_success_count = success_count if self.stats_count_cache_as_success else api_success_count
+                if success_count > 0 or failed_count > 0:
+                    self.record_ocr('general', stats_success_count, failed_count, total_lines,
+                                    cached_count=cached_count, cached_lines=cached_lines,
+                                    api_lines=api_lines, processed_count=1)
+
                 self.root.after(0, lambda: self.progress_label.config(
                     text=f"✓ 截图识别完成！文字行数：{total_lines}"))
+                self.root.after(0, lambda: self._set_status('done'))
             except Exception as e:
                 self.root.after(0, lambda: self.result_text.insert(tk.END, f"\n发生错误：{str(e)}\n"))
                 self.root.after(0, lambda: messagebox.showerror("错误", f"发生错误：{str(e)}"))
@@ -9435,15 +9450,15 @@ class OCRApp:
         except Exception as e:
             print(f"⚠️ 保存历史记录失败: {e}")
     
-    def _increment_book_page_for_import(self):
-        """导入图片时把"当前页"+1。"""
+    def _increment_book_page_for_import(self, count=1):
+        """导入图片时把"当前页"+count。"""
         if not hasattr(self, '_book_page_var'):
             return
         try:
             page_no = int(self._book_page_var.get())
         except (ValueError, TypeError):
             return
-        next_page = page_no + 1
+        next_page = page_no + count
         self._suppress_book_page_trace = True
         try:
             self._book_page_var.set(str(next_page))
