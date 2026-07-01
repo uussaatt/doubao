@@ -7832,6 +7832,8 @@ class OCRApp:
             cb = callback_store[0]
             if cb:
                 cb(choice, selected_merged[0], total_width, max_height, selected_mode[0])
+            # 跳回时同步侧边栏模式
+            self._sync_ocr_sidebar_mode(selected_mode[0])
             self._nav_to('OCR识别')
 
         def on_resize(event):
@@ -11878,6 +11880,8 @@ class OCRApp:
                 self.file_label.config(
                     text=f'截图拼接：{w}×{h} px，{len(captured_shots)} 张',
                     fg='#1E5A8A')
+                # 跳回时同步侧边栏模式
+                self._sync_ocr_sidebar_mode(shot_mode[0])
                 self._nav_to('OCR识别')
                 self._run_ocr_by_mode(shot_mode[0], delay=100)
 
