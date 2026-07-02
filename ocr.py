@@ -416,7 +416,7 @@ class OCRApp:
         
         # 尺寸限制解锁状态
         self.size_limit_unlocked = False
-        self.unlock_password = "000"  # 设置密码
+        self.unlock_password = self.store.get('unlock_password', '000')
 
         # 拼接图片保存路径
         self.merge_save_path = self.store.get('merge_save_path', '')
@@ -1888,6 +1888,47 @@ class OCRApp:
         page_entry.grid(row=1, column=1, sticky='ew', padx=(6, 0), pady=2, ipady=3)
         book_inner.columnconfigure(1, weight=1)
 
+        def _get_max_history_page():
+            """从历史记录中取最大页码 +1"""
+            max_page = 0
+            for item in self.history_data:
+                try:
+                    p = int(item.get('page_no', 0))
+                    if p > max_page:
+                        max_page = p
+                except (ValueError, TypeError):
+                    pass
+            return max_page + 1
+
+        def _show_page_picker():
+            """弹出页码选择菜单"""
+            menu = tk.Menu(self.root, tearoff=0)
+            max_plus1 = _get_max_history_page()
+            menu.add_command(
+                label=f'📜 历史最大页码 +1（{max_plus1}）',
+                command=lambda: self._book_page_var.set(str(max_plus1))
+            )
+            menu.add_separator()
+            menu.add_command(
+                label='✏️ 手动输入（直接编辑上方输入框）',
+                command=lambda: page_entry.focus_set()
+            )
+            try:
+                x = page_pick_btn.winfo_rootx()
+                y = page_pick_btn.winfo_rooty() + page_pick_btn.winfo_height()
+                menu.tk_popup(x, y)
+            finally:
+                menu.grab_release()
+
+        page_pick_btn = tk.Button(
+            book_inner, text='⊕', command=_show_page_picker,
+            bg='white', fg='#6B7280', relief='flat',
+            font=('Microsoft YaHei', 9), cursor='hand2',
+            highlightthickness=1, highlightbackground='#E5E7EB',
+            padx=4, pady=1
+        )
+        page_pick_btn.grid(row=1, column=2, padx=(4, 0), pady=2)
+
         def _save_book_name(*_):
             self.store.set('book_name', self._book_name_var.get().strip())
 
@@ -2188,6 +2229,39 @@ class OCRApp:
             except Exception as e:
                 messagebox.showerror('保存失败', f'保存图片时出错：{e}')
 
+    def _gallery_start_merge(self):
+        """从图片预览页发起拼接识别——选择图片后进入拼接预览"""
+        file_paths = filedialog.askopenfilenames(
+            title='选择要拼接的图片（可多选，按住 Ctrl）',
+            filetypes=[('图片文件', '*.jpg *.jpeg *.png *.bmp'), ('所有文件', '*.*')]
+        )
+        if not file_paths or len(file_paths) < 2:
+            if file_paths:
+                messagebox.showwarning('提示', '请至少选择 2 张图片进行拼接')
+            return
+        try:
+            images = [Image.open(p) for p in file_paths]
+        except Exception as e:
+            messagebox.showerror('错误', f'打开图片失败：{e}')
+            return
+
+        def on_choice(choice, merged_image, total_width, max_height, ocr_mode):
+            if choice == 'cancel':
+                return
+            save_path = self._save_merged_image(merged_image, len(images), total_width, max_height)
+            if not save_path:
+                return
+            self.progress_label.config(text=f'✓ 拼接图片已保存：{os.path.basename(save_path)}')
+            self.image_paths = [save_path]
+            self.file_label.config(
+                text=f'已选择: 拼接图片 ({len(images)}张) - {total_width}x{max_height}',
+                fg='blue')
+            self._run_ocr_by_mode(ocr_mode)
+
+        self._show_merged_image_preview(
+            images, item_label='图片数量', item_action='选择', preview_type='merge'
+        )(on_choice)
+
     def _build_gallery_page(self):
         """构建图片预览页——显示所有已识别图片的缩略图，自适应工作区宽度"""
         page = self._page_gallery
@@ -2204,6 +2278,10 @@ class OCRApp:
                   bg='#EFF6FF', fg='#1A6FD4', relief='flat',
                   font=('Microsoft YaHei', 9), padx=10, pady=4,
                   cursor='hand2').pack(side=tk.RIGHT)
+        tk.Button(header, text='✂️ 拼接识别', command=self._gallery_start_merge,
+                  bg='#FF9800', fg='white', relief='flat',
+                  font=('Microsoft YaHei', 9), padx=10, pady=4,
+                  cursor='hand2').pack(side=tk.RIGHT, padx=(0, 8))
 
         # 收集所有已处理的图片路径
         seen = set()
@@ -2490,7 +2568,7 @@ class OCRApp:
             )
 
     def _get_export_default_name(self):
-        """生成导出文件名：书名_页码（如果没有书名则用日期）"""
+        """生成导出文件名：书名_页码-1（如果没有书名则用日期）"""
         book_name = ''
         page_no = ''
         if hasattr(self, '_book_name_var'):
@@ -2501,7 +2579,10 @@ class OCRApp:
             except (ValueError, TypeError):
                 page_no = ''
         if book_name:
-            return f'{book_name}_第{page_no}页' if page_no != '' else book_name
+            if page_no != '':
+                display_page = page_no - 1
+                return f'{book_name}_{display_page}'
+            return book_name
         return datetime.now().strftime('%Y-%m-%d')
 
     def _get_export_save_path(self, ext):
@@ -7423,8 +7504,6 @@ class OCRApp:
 
     def _handle_dropped_images(self, image_files):
         """处理拖入的图片：单张直接识别，两张询问是否拼接，多张直接批量识别"""
-        self._increment_book_page_for_import(len(image_files))
-
         count = len(image_files)
 
         if count == 1:
@@ -8164,9 +8243,6 @@ class OCRApp:
                 self.select_file_internal(file_paths[0])
             else:
                 self.batch_select_files_internal(list(file_paths))
-            # 导入新图片后，当前页按图片数量递增
-            self._capture_history_book_page()
-            self._increment_book_page_for_import(len(file_paths))
     
     def batch_select_files_internal(self, file_paths):
         """内部方法：处理批量文件选择逻辑"""
@@ -8520,16 +8596,21 @@ class OCRApp:
                         self.stats[today]['accurate']['skipped'] += skipped_count
                         self.save_stats()
                 
-                # 每张图片单独存一条历史记录，页码从当前页依次递增
+                # 每张图片单独存一条历史记录，从当前页开始按成功顺序递增，最后更新页码
                 results_copy = [r.copy() for r in self.all_results]
                 try:
                     base_page = int(self._book_page_var.get()) if hasattr(self, '_book_page_var') else 1
                 except (ValueError, TypeError):
                     base_page = 1
-                for i, r in enumerate(results_copy):
+                success_idx = 0
+                for r in results_copy:
                     if r.get('count', 0) > 0 and not r.get('skipped', False):
-                        page_no = base_page + i
+                        page_no = base_page + success_idx
                         self.root.after(0, lambda _r=r, _p=page_no: self.add_to_history('高精度识别', [_r], override_page=_p))
+                        success_idx += 1
+                # 识别完成后页码递增实际成功张数
+                if success_idx > 0:
+                    self.root.after(0, lambda n=success_idx: self._increment_book_page_for_import(n))
             
             self.root.after(0, lambda: self.progress_label.config(text=f"✓ 识别完成 共 {total} 个文件", fg='#16A34A'))
             self.root.after(0, lambda: self.export_btn.config(state=tk.NORMAL))
@@ -8807,16 +8888,20 @@ class OCRApp:
                 self.record_ocr('general', stats_success_count, failed_count, total_lines,
                                 cached_count=cached_count, cached_lines=cached_lines,
                                 api_lines=api_lines, processed_count=actual_processed)
-                # 每张图片单独存一条历史记录，页码从当前页依次递增
+                # 每张图片单独存一条历史记录，从当前页开始按成功顺序递增，最后更新页码
                 results_copy = [r.copy() for r in self.all_results]
                 try:
                     base_page = int(self._book_page_var.get()) if hasattr(self, '_book_page_var') else 1
                 except (ValueError, TypeError):
                     base_page = 1
-                for i, r in enumerate(results_copy):
+                success_idx = 0
+                for r in results_copy:
                     if r.get('count', 0) > 0 and not r.get('skipped', False):
-                        page_no = base_page + i
+                        page_no = base_page + success_idx
                         self.root.after(0, lambda _r=r, _p=page_no: self.add_to_history('通用识别', [_r], override_page=_p))
+                        success_idx += 1
+                if success_idx > 0:
+                    self.root.after(0, lambda n=success_idx: self._increment_book_page_for_import(n))
             
             self.root.after(0, lambda: self.progress_label.config(text=f"✓ 识别完成 共 {total} 个文件", fg='#16A34A'))
             self.root.after(0, lambda: self.export_btn.config(state=tk.NORMAL))
@@ -8991,16 +9076,20 @@ class OCRApp:
                 self.record_ocr('basic', stats_success_count, failed_count, total_lines,
                                 cached_count=cached_count, cached_lines=cached_lines,
                                 api_lines=api_lines, processed_count=actual_processed)
-                # 每张图片单独存一条历史记录，页码从当前页依次递增
+                # 每张图片单独存一条历史记录，从当前页开始按成功顺序递增，最后更新页码
                 results_copy = [r.copy() for r in self.all_results]
                 try:
                     base_page = int(self._book_page_var.get()) if hasattr(self, '_book_page_var') else 1
                 except (ValueError, TypeError):
                     base_page = 1
-                for i, r in enumerate(results_copy):
+                success_idx = 0
+                for r in results_copy:
                     if r.get('count', 0) > 0 and not r.get('skipped', False):
-                        page_no = base_page + i
+                        page_no = base_page + success_idx
                         self.root.after(0, lambda _r=r, _p=page_no: self.add_to_history('快速识别', [_r], override_page=_p))
+                        success_idx += 1
+                if success_idx > 0:
+                    self.root.after(0, lambda n=success_idx: self._increment_book_page_for_import(n))
             
             self.root.after(0, lambda: self.progress_label.config(text=f"✓ 识别完成 共 {total} 个文件", fg='#16A34A'))
             self.root.after(0, lambda: self.export_btn.config(state=tk.NORMAL))
@@ -9465,6 +9554,8 @@ class OCRApp:
             self.store.set('book_page', next_page)
         finally:
             self._suppress_book_page_trace = False
+        # 弹出提示：当前页是 next_page - 1（即刚识别完的那页）
+        self.root.after(0, lambda p=next_page - 1: self.show_toast(f'📖 当前页：第 {p} 页', duration=5000))
 
     def _capture_history_book_page(self):
         """Remember the page number that belongs to the current import/recognition."""
@@ -10817,7 +10908,7 @@ class OCRApp:
     
     def show_settings_panel(self):
         """右上角设置面板：书籍信息 + 导出设置 + 快捷操作"""
-        win = self.create_popup_window(self.root, "设置", "top_settings", 480, 420)
+        win = self.create_popup_window(self.root, "设置", "top_settings", 480, 580)
         BG = 'white'
 
         # ── 导出设置 ──
@@ -10932,6 +11023,66 @@ class OCRApp:
             self._clear_merge_save_path(), _refresh_merge_lbl()),
                   bg='#E5E7EB', fg='#EF4444', relief='flat',
                   font=('Microsoft YaHei', 8), padx=6, cursor='hand2').pack(side=tk.LEFT)
+
+        # ── 修改密码 ──
+        sec_pwd = tk.LabelFrame(win, text='🔐 修改密码', padx=12, pady=10, bg=BG,
+                                font=('Microsoft YaHei', 10, 'bold'), fg='#374151')
+        sec_pwd.pack(fill=tk.X, padx=20, pady=(12, 0))
+
+        pwd_grid = tk.Frame(sec_pwd, bg=BG)
+        pwd_grid.pack(fill=tk.X)
+
+        tk.Label(pwd_grid, text='旧密码', bg=BG, fg='#374151',
+                 font=('Microsoft YaHei', 9)).grid(row=0, column=0, sticky='w', pady=3)
+        old_pwd_var = tk.StringVar()
+        tk.Entry(pwd_grid, textvariable=old_pwd_var, show='*', width=14,
+                 font=('Microsoft YaHei', 9), relief='flat',
+                 highlightthickness=1, highlightbackground='#DDE3EA'
+                 ).grid(row=0, column=1, sticky='w', padx=(8, 0), ipady=3)
+
+        tk.Label(pwd_grid, text='新密码', bg=BG, fg='#374151',
+                 font=('Microsoft YaHei', 9)).grid(row=1, column=0, sticky='w', pady=3)
+        new_pwd_var = tk.StringVar()
+        tk.Entry(pwd_grid, textvariable=new_pwd_var, show='*', width=14,
+                 font=('Microsoft YaHei', 9), relief='flat',
+                 highlightthickness=1, highlightbackground='#DDE3EA'
+                 ).grid(row=1, column=1, sticky='w', padx=(8, 0), ipady=3)
+
+        tk.Label(pwd_grid, text='确认新密码', bg=BG, fg='#374151',
+                 font=('Microsoft YaHei', 9)).grid(row=2, column=0, sticky='w', pady=3)
+        confirm_pwd_var = tk.StringVar()
+        tk.Entry(pwd_grid, textvariable=confirm_pwd_var, show='*', width=14,
+                 font=('Microsoft YaHei', 9), relief='flat',
+                 highlightthickness=1, highlightbackground='#DDE3EA'
+                 ).grid(row=2, column=1, sticky='w', padx=(8, 0), ipady=3)
+
+        pwd_msg = tk.Label(sec_pwd, text='', bg=BG, font=('Microsoft YaHei', 8))
+        pwd_msg.pack(anchor='w', pady=(4, 0))
+
+        def save_password():
+            old = old_pwd_var.get()
+            new = new_pwd_var.get().strip()
+            confirm = confirm_pwd_var.get().strip()
+            if old != self.unlock_password:
+                pwd_msg.config(text='❌ 旧密码错误', fg='#EF4444')
+                return
+            if not new:
+                pwd_msg.config(text='❌ 新密码不能为空', fg='#EF4444')
+                return
+            if new != confirm:
+                pwd_msg.config(text='❌ 两次新密码不一致', fg='#EF4444')
+                return
+            self.unlock_password = new
+            self.store.set('unlock_password', new)
+            old_pwd_var.set('')
+            new_pwd_var.set('')
+            confirm_pwd_var.set('')
+            pwd_msg.config(text='✅ 密码已修改', fg='#16A34A')
+
+        tk.Button(sec_pwd, text='修改密码', command=save_password,
+                  bg='#1A6FD4', fg='white', relief='flat',
+                  font=('Microsoft YaHei', 9), padx=14, pady=4,
+                  cursor='hand2').pack(anchor='w', pady=(6, 0))
 
         # 底部按钮
         bottom = tk.Frame(win, bg=BG)
