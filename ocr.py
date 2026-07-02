@@ -2278,8 +2278,9 @@ class OCRApp:
                   bg='#EFF6FF', fg='#1A6FD4', relief='flat',
                   font=('Microsoft YaHei', 9), padx=10, pady=4,
                   cursor='hand2').pack(side=tk.RIGHT)
-        tk.Button(header, text='✂️ 拼接识别', command=self._gallery_start_merge,
-                  bg='#FF9800', fg='white', relief='flat',
+        tk.Button(header, text='↩ 重新预览拼接',
+                  command=self._reopen_last_merge_preview,
+                  bg='#EFF6FF', fg='#1A6FD4', relief='flat',
                   font=('Microsoft YaHei', 9), padx=10, pady=4,
                   cursor='hand2').pack(side=tk.RIGHT, padx=(0, 8))
 
@@ -7939,6 +7940,8 @@ class OCRApp:
     def _merge_images_from_drag(self, file_paths):
         """从拖放触发的拼接图片功能"""
         try:
+            # 保存源文件路径，供图片预览页重新调出拼接预览
+            self._last_merge_sources = list(file_paths)
             # 加载所有图片
             images = []
             for path in file_paths:
@@ -7969,6 +7972,38 @@ class OCRApp:
 
         except Exception as e:
             messagebox.showerror("错误", f"拼接失败：{str(e)}")
+
+    def _reopen_last_merge_preview(self):
+        """重新打开上次拼接预览（使用 _last_merge_sources 中保存的路径）"""
+        file_paths = getattr(self, '_last_merge_sources', None)
+        if not file_paths:
+            messagebox.showinfo("提示", "没有上次拼接记录")
+            return
+        try:
+            images = []
+            for path in file_paths:
+                img = Image.open(path)
+                images.append(img)
+
+            def on_choice(choice, merged_image, total_width, max_height, ocr_mode):
+                if choice == 'cancel':
+                    return
+                save_path = self._save_merged_image(merged_image, len(images), total_width, max_height)
+                if not save_path:
+                    return
+                self.progress_label.config(
+                    text=f"✓ 拼接图片已保存到：{os.path.basename(save_path)}")
+                self.image_paths = [save_path]
+                self.file_label.config(
+                    text=f"已选择: 拼接图片 ({len(images)}张) - {total_width}x{max_height}",
+                    fg="blue")
+                self._run_ocr_by_mode(ocr_mode)
+
+            self._show_merged_image_preview(
+                images, item_label='图片数量', item_action='选择', preview_type='merge'
+            )(on_choice)
+        except Exception as e:
+            messagebox.showerror("错误", f"重新预览失败：{str(e)}")
 
     def _create_ribbon_group(self, parent, title):
         """创建Ribbon功能组"""
@@ -11676,15 +11711,13 @@ class OCRApp:
             return
         
         try:
+            # 保存源文件路径，供图片预览页重新调出拼接预览
+            self._last_merge_sources = list(file_paths)
             # 加载所有图片
             images = []
             for path in file_paths:
                 img = Image.open(path)
                 images.append(img)
-            
-            def on_choice(choice, merged_image, total_width, max_height, ocr_mode):
-                if choice == 'cancel':
-                    return
 
                 if not self._has_ocr_key(ocr_mode):
                     mode_names = {'accurate': '高精度', 'basic': '快速', 'general': '通用'}
