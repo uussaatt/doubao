@@ -7974,34 +7974,117 @@ class OCRApp:
             messagebox.showerror("错误", f"拼接失败：{str(e)}")
 
     def _reopen_last_merge_preview(self):
-        """重新打开上次拼接预览（使用 _last_merge_sources 中保存的路径）"""
-        file_paths = getattr(self, '_last_merge_sources', None)
-        if not file_paths:
+        """重新打开上次拼接预览，支持文件拼接、截图拼接、裁剪拼接三种来源"""
+        # 优先用最近一次操作，按时间顺序判断（通过各自的标记属性）
+        # 截图：_last_screenshot_images（PIL Image 列表）
+        # 裁剪：_last_crop_images（PIL Image 列表）
+        # 文件拼接：_last_merge_sources（文件路径列表）
+        screenshot_images = getattr(self, '_last_screenshot_images', None)
+        crop_images = getattr(self, '_last_crop_images', None)
+        file_sources = getattr(self, '_last_merge_sources', None)
+
+        if not any([screenshot_images, crop_images, file_sources]):
             messagebox.showinfo("提示", "没有上次拼接记录")
             return
-        try:
-            images = []
-            for path in file_paths:
-                img = Image.open(path)
-                images.append(img)
 
-            def on_choice(choice, merged_image, total_width, max_height, ocr_mode):
-                if choice == 'cancel':
-                    return
-                save_path = self._save_merged_image(merged_image, len(images), total_width, max_height)
-                if not save_path:
-                    return
-                self.progress_label.config(
-                    text=f"✓ 拼接图片已保存到：{os.path.basename(save_path)}")
-                self.image_paths = [save_path]
-                self.file_label.config(
-                    text=f"已选择: 拼接图片 ({len(images)}张) - {total_width}x{max_height}",
-                    fg="blue")
-                self._run_ocr_by_mode(ocr_mode)
+        # 若有多个来源，让用户选择
+        sources = []
+        if file_sources:
+            sources.append(('文件拼接', 'file'))
+        if screenshot_images:
+            sources.append(('截图拼接', 'screenshot'))
+        if crop_images:
+            sources.append(('裁剪拼接', 'crop'))
+
+        if len(sources) == 1:
+            chosen = sources[0][1]
+        else:
+            win = tk.Toplevel(self.root)
+            win.title('选择来源')
+            win.transient(self.root)
+            win.grab_set()
+            win.configure(bg='white')
+            win.resizable(False, False)
+            sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+            win.geometry(f'260x{40 + len(sources)*48}+{sw//2-130}+{sh//2-80}')
+            tk.Label(win, text='重新预览哪次拼接？', bg='white', fg='#111827',
+                     font=('Microsoft YaHei', 10, 'bold')).pack(pady=(14, 6))
+            chosen_var = [None]
+            def pick(v):
+                chosen_var[0] = v
+                win.destroy()
+            for label, val in sources:
+                tk.Button(win, text=label, command=lambda v=val: pick(v),
+                          bg='#EFF6FF', fg='#1A6FD4', relief='flat',
+                          font=('Microsoft YaHei', 10), padx=20, pady=6,
+                          cursor='hand2').pack(pady=4)
+            win.bind('<Escape>', lambda e: win.destroy())
+            win.wait_window()
+            chosen = chosen_var[0]
+            if not chosen:
+                return
+
+        try:
+            if chosen == 'file':
+                images = [Image.open(p) for p in file_sources]
+                item_label, item_action, preview_type = '图片数量', '选择', 'merge'
+
+                def on_choice(choice, merged_image, total_width, max_height, ocr_mode):
+                    if choice == 'cancel':
+                        return
+                    save_path = self._save_merged_image(merged_image, len(images), total_width, max_height)
+                    if not save_path:
+                        return
+                    self.progress_label.config(text=f"✓ 拼接图片已保存到：{os.path.basename(save_path)}")
+                    self.image_paths = [save_path]
+                    self.file_label.config(
+                        text=f"已选择: 拼接图片 ({len(images)}张) - {total_width}x{max_height}", fg="blue")
+                    self._run_ocr_by_mode(ocr_mode)
+
+            elif chosen == 'screenshot':
+                images = screenshot_images
+                item_label, item_action, preview_type = '截图数量', '截取', 'screenshot'
+
+                def on_choice(choice, merged_image, total_width, max_height, ocr_mode):
+                    if choice == 'cancel':
+                        return
+                    import tempfile
+                    tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+                    tmp.close()
+                    merged_image.save(tmp.name)
+                    self.image_paths = [tmp.name]
+                    self.file_label.config(
+                        text=f'截图拼接：{total_width}×{max_height} px，{len(images)} 张', fg='#1E5A8A')
+                    self._sync_ocr_sidebar_mode(ocr_mode)
+                    self._run_ocr_by_mode(ocr_mode)
+
+            else:  # crop
+                images = crop_images
+                item_label, item_action, preview_type = '区域数量', '框选', 'crop'
+
+                def on_choice(choice, merged_image, total_width, max_height, ocr_mode):
+                    if choice == 'cancel':
+                        return
+                    import tempfile
+                    temp_dir = tempfile.gettempdir()
+                    temp_path = os.path.join(temp_dir, "cropped_merged_ocr.jpg")
+                    merged_image.save(temp_path, format='JPEG', quality=90)
+                    if choice == 'save':
+                        timestamp = datetime.now().strftime('%m-%d-%H-%M-%S')
+                        filename = f'crop_{len(images)}w{total_width}h{max_height}_{timestamp}.jpg'
+                        save_dir = self.merge_save_path or os.path.expanduser('~\\Pictures')
+                        os.makedirs(save_dir, exist_ok=True)
+                        merged_image.save(os.path.join(save_dir, filename), format='JPEG', quality=95)
+                        self.show_toast(f'✓ 已保存：{filename}')
+                    self.image_paths = [temp_path]
+                    self.file_label.config(
+                        text=f"裁剪拼接图片 ({len(images)}个区域) - 宽{total_width} x 高{max_height}", fg="blue")
+                    self._run_ocr_by_mode(ocr_mode)
 
             self._show_merged_image_preview(
-                images, item_label='图片数量', item_action='选择', preview_type='merge'
+                images, item_label=item_label, item_action=item_action, preview_type=preview_type
             )(on_choice)
+
         except Exception as e:
             messagebox.showerror("错误", f"重新预览失败：{str(e)}")
 
@@ -11930,6 +12013,9 @@ class OCRApp:
             if not captured_shots:
                 return
 
+            # 保存截图列表，供图片预览页重新调出预览
+            self._last_screenshot_images = list(captured_shots)
+
             shots_rtl = list(reversed(captured_shots))
             total_w = sum(s.width for s in shots_rtl)
             max_h = max(s.height for s in shots_rtl)
@@ -12578,6 +12664,9 @@ class OCRApp:
                         cropped = original_img.crop((x1, y1, x2, y2))
                         cropped_images.append(cropped)
                     
+                    # 保存裁剪结果，供图片预览页重新调出预览
+                    self._last_crop_images = list(cropped_images)
+
                     total_width = sum(img.width for img in cropped_images)
                     max_height = max(img.height for img in cropped_images)
                     
