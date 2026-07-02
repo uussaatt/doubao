@@ -529,7 +529,7 @@ class OCRApp:
         _title_btn(self.root.nametowidget(title_bar) if False else title_bar,
                    '?  帮助', lambda: messagebox.showinfo('帮助', '使用左侧导航切换功能页面'))
         _title_btn(title_bar, '⚙  设置', self.show_settings_panel)
-        _title_btn(title_bar, '☆  主题', lambda: None)
+
 
         # 分隔线
         tk.Frame(title_bar, bg='#E5E7EB', width=1).pack(side=tk.RIGHT, fill=tk.Y, pady=8, padx=4)
@@ -2278,11 +2278,27 @@ class OCRApp:
                   bg='#EFF6FF', fg='#1A6FD4', relief='flat',
                   font=('Microsoft YaHei', 9), padx=10, pady=4,
                   cursor='hand2').pack(side=tk.RIGHT)
-        tk.Button(header, text='↩ 重新预览拼接',
-                  command=self._reopen_last_merge_preview,
-                  bg='#EFF6FF', fg='#1A6FD4', relief='flat',
-                  font=('Microsoft YaHei', 9), padx=10, pady=4,
-                  cursor='hand2').pack(side=tk.RIGHT, padx=(0, 8))
+
+        # 拼接历史记录区域（始终显示）
+        hist_frame = tk.Frame(page, bg='#F7F9FC',
+                              highlightthickness=1, highlightbackground='#E5E7EB')
+        hist_frame.pack(fill=tk.X, padx=24, pady=(0, 10))
+        tk.Label(hist_frame, text='↩ 拼接历史', bg='#F7F9FC', fg='#6B7280',
+                 font=('Microsoft YaHei', 9, 'bold')).pack(side=tk.LEFT, padx=(10, 8), pady=6)
+        history = getattr(self, '_merge_history', [])
+        if history:
+            for i, entry in enumerate(history):
+                tag = '最近' if i == 0 else f'#{i+1}'
+                tip = f"[{entry['label']}] {entry['desc']}  {entry['time']}"
+                btn = tk.Button(hist_frame, text=f"{tag}  {tip}",
+                                command=lambda e=entry: self._reopen_merge_entry(e),
+                                bg='#EFF6FF', fg='#1A6FD4', relief='flat',
+                                font=('Microsoft YaHei', 8), padx=8, pady=3,
+                                cursor='hand2', anchor='w')
+                btn.pack(side=tk.LEFT, padx=(0, 6), pady=6)
+        else:
+            tk.Label(hist_frame, text='暂无记录，执行拼接/截图/裁剪后自动保存', bg='#F7F9FC', fg='#9CA3AF',
+                     font=('Microsoft YaHei', 8)).pack(side=tk.LEFT, pady=6)
 
         # 收集所有已处理的图片路径
         seen = set()
@@ -7941,7 +7957,7 @@ class OCRApp:
         """从拖放触发的拼接图片功能"""
         try:
             # 保存源文件路径，供图片预览页重新调出拼接预览
-            self._last_merge_sources = list(file_paths)
+            self._add_merge_history('file', list(file_paths))
             # 加载所有图片
             images = []
             for path in file_paths:
@@ -7973,60 +7989,44 @@ class OCRApp:
         except Exception as e:
             messagebox.showerror("错误", f"拼接失败：{str(e)}")
 
+    def _add_merge_history(self, source_type, data):
+        """添加一条拼接历史记录，最多保留5条"""
+        if not hasattr(self, '_merge_history'):
+            self._merge_history = []
+        from datetime import datetime
+        label_map = {'file': '文件拼接', 'screenshot': '截图拼接', 'crop': '裁剪拼接'}
+        if source_type == 'file':
+            desc = '、'.join([os.path.basename(p) for p in data[:2]])
+            if len(data) > 2:
+                desc += f' 等{len(data)}张'
+        else:
+            desc = f'{len(data)} 张图片'
+        entry = {
+            'type': source_type,
+            'data': data,
+            'label': label_map.get(source_type, source_type),
+            'desc': desc,
+            'time': datetime.now().strftime('%H:%M:%S'),
+        }
+        self._merge_history.insert(0, entry)
+        self._merge_history = self._merge_history[:5]
+
     def _reopen_last_merge_preview(self):
         """重新打开上次拼接预览，支持文件拼接、截图拼接、裁剪拼接三种来源"""
-        # 优先用最近一次操作，按时间顺序判断（通过各自的标记属性）
-        # 截图：_last_screenshot_images（PIL Image 列表）
-        # 裁剪：_last_crop_images（PIL Image 列表）
-        # 文件拼接：_last_merge_sources（文件路径列表）
-        screenshot_images = getattr(self, '_last_screenshot_images', None)
-        crop_images = getattr(self, '_last_crop_images', None)
-        file_sources = getattr(self, '_last_merge_sources', None)
-
-        if not any([screenshot_images, crop_images, file_sources]):
+        # 从历史记录中取最近一条
+        history = getattr(self, '_merge_history', [])
+        if not history:
             messagebox.showinfo("提示", "没有上次拼接记录")
             return
+        self._reopen_merge_entry(history[0])
 
-        # 若有多个来源，让用户选择
-        sources = []
-        if file_sources:
-            sources.append(('文件拼接', 'file'))
-        if screenshot_images:
-            sources.append(('截图拼接', 'screenshot'))
-        if crop_images:
-            sources.append(('裁剪拼接', 'crop'))
-
-        if len(sources) == 1:
-            chosen = sources[0][1]
-        else:
-            win = tk.Toplevel(self.root)
-            win.title('选择来源')
-            win.transient(self.root)
-            win.grab_set()
-            win.configure(bg='white')
-            win.resizable(False, False)
-            sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-            win.geometry(f'260x{40 + len(sources)*48}+{sw//2-130}+{sh//2-80}')
-            tk.Label(win, text='重新预览哪次拼接？', bg='white', fg='#111827',
-                     font=('Microsoft YaHei', 10, 'bold')).pack(pady=(14, 6))
-            chosen_var = [None]
-            def pick(v):
-                chosen_var[0] = v
-                win.destroy()
-            for label, val in sources:
-                tk.Button(win, text=label, command=lambda v=val: pick(v),
-                          bg='#EFF6FF', fg='#1A6FD4', relief='flat',
-                          font=('Microsoft YaHei', 10), padx=20, pady=6,
-                          cursor='hand2').pack(pady=4)
-            win.bind('<Escape>', lambda e: win.destroy())
-            win.wait_window()
-            chosen = chosen_var[0]
-            if not chosen:
-                return
-
+    def _reopen_merge_entry(self, entry):
+        """根据一条历史记录重新打开拼接预览"""
+        source_type = entry['type']
+        data = entry['data']
         try:
-            if chosen == 'file':
-                images = [Image.open(p) for p in file_sources]
+            if source_type == 'file':
+                images = [Image.open(p) for p in data]
                 item_label, item_action, preview_type = '图片数量', '选择', 'merge'
 
                 def on_choice(choice, merged_image, total_width, max_height, ocr_mode):
@@ -8041,8 +8041,8 @@ class OCRApp:
                         text=f"已选择: 拼接图片 ({len(images)}张) - {total_width}x{max_height}", fg="blue")
                     self._run_ocr_by_mode(ocr_mode)
 
-            elif chosen == 'screenshot':
-                images = screenshot_images
+            elif source_type == 'screenshot':
+                images = data
                 item_label, item_action, preview_type = '截图数量', '截取', 'screenshot'
 
                 def on_choice(choice, merged_image, total_width, max_height, ocr_mode):
@@ -8059,7 +8059,7 @@ class OCRApp:
                     self._run_ocr_by_mode(ocr_mode)
 
             else:  # crop
-                images = crop_images
+                images = data
                 item_label, item_action, preview_type = '区域数量', '框选', 'crop'
 
                 def on_choice(choice, merged_image, total_width, max_height, ocr_mode):
@@ -11795,7 +11795,7 @@ class OCRApp:
         
         try:
             # 保存源文件路径，供图片预览页重新调出拼接预览
-            self._last_merge_sources = list(file_paths)
+            self._add_merge_history('file', list(file_paths))
             # 加载所有图片
             images = []
             for path in file_paths:
@@ -12014,7 +12014,7 @@ class OCRApp:
                 return
 
             # 保存截图列表，供图片预览页重新调出预览
-            self._last_screenshot_images = list(captured_shots)
+            self._add_merge_history('screenshot', list(captured_shots))
 
             shots_rtl = list(reversed(captured_shots))
             total_w = sum(s.width for s in shots_rtl)
@@ -12665,7 +12665,7 @@ class OCRApp:
                         cropped_images.append(cropped)
                     
                     # 保存裁剪结果，供图片预览页重新调出预览
-                    self._last_crop_images = list(cropped_images)
+                    self._add_merge_history('crop', list(cropped_images))
 
                     total_width = sum(img.width for img in cropped_images)
                     max_height = max(img.height for img in cropped_images)
